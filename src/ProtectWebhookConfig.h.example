@@ -1,0 +1,32 @@
+#pragma once
+// Copy to ProtectWebhookConfig.h (git-ignored) and fill in. Build with
+// -DNUKI_HUB_PROTECT_WEBHOOK. All values below are placeholders.
+
+// Long random secret, passed as ?k=... in the Protect "Delivery URL".
+// Generate with: openssl rand -hex 32
+#define PROTECT_WEBHOOK_SECRET "replace-with-64-hex-chars"
+
+// Only accept requests from the Protect console (NVR / UNVR / CK) IP. "" disables the check.
+#define PROTECT_WEBHOOK_SOURCE_IP "192.0.2.10"
+
+// MAC of the reader (doorbell / G4 Pro / G6 Entry). Any separator/case is fine.
+#define PROTECT_WEBHOOK_DEVICE_MAC "AA:BB:CC:DD:EE:FF"
+
+// Trigger keys that may unlock. Protect sends the *user GUID* in "value" for
+// registered NFC cards and identified fingerprints.
+static const char* const PROTECT_WEBHOOK_KEYS[] = { "nfc_registered" };
+
+// Protect user GUIDs allowed to unlock (Admins & Users -> user -> ID).
+static const char* const PROTECT_WEBHOOK_USERS[] = {
+    "00000000-0000-0000-0000-000000000001",
+};
+
+// Nuki Hub lock action to run: "unlock", "unlatch", "lockngo", ...
+// Still subject to Nuki Hub's own "Nuki Lock Access Control" ACL.
+#define PROTECT_WEBHOOK_ACTION "unlock"
+
+// Reject events whose Protect timestamp is further than this from our (NTP) clock.
+#define PROTECT_WEBHOOK_MAX_SKEW_MS 15000
+
+// Minimum time between two accepted actions.
+#define PROTECT_WEBHOOK_COOLDOWN_MS 10000

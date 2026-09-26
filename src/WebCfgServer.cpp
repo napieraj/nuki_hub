@@ -43,6 +43,7 @@ static esp_hosted_coprocessor_fwver_t host_version_struct = {
 #include <HTTPClient.h>
 #include <NetworkClientSecure.h>
 #include "ArduinoJson.h"
+#include "ProtectWebhook.h"
 #include <freertos/queue.h>
 
 typedef struct
@@ -1359,6 +1360,9 @@ void WebCfgServer::initialize()
         });
 
         _psychicServer->on("/uploadota", HTTP_POST, updateHandler);
+#ifdef NUKI_HUB_PROTECT_WEBHOOK
+        ProtectWebhook::registerRoute(_psychicServer, _nuki);
+#endif
         //Update.onProgress(printProgress);
     }
 

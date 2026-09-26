@@ -40,6 +40,7 @@ public:
 
     const NukiLock::KeyTurnerState& keyTurnerState();
     const bool isPaired() const;
+    LockActionResult requestLockAction(const char* action);
     const bool hasKeypad() const;
     bool hasDoorSensor() const;
     const bool offConnected();

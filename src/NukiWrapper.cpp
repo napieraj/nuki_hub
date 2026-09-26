@@ -1198,6 +1198,12 @@ LockActionResult NukiWrapper::onLockActionReceivedCallback(const char *value)
     return nukiInst->onLockActionReceived(value);
 }
 
+LockActionResult NukiWrapper::requestLockAction(const char *action)
+{
+    // Same path (and ACL) as an MQTT lock action.
+    return onLockActionReceived(action);
+}
+
 LockActionResult NukiWrapper::onLockActionReceived(const char *value)
 {
     NukiLock::LockAction action;
