@@ -6,6 +6,8 @@
 #include "LockActionResult.h"
 #include "EspMillis.h"
 #include "Logger.h"
+#include "RestartReason.h"
+#include "WaveshareBoard.h"
 #include "util/NukiHelper.h"
 #include "ArduinoJson.h"
 #include <time.h>
@@ -17,6 +19,9 @@ extern bool timeSynced;
 // Older local ProtectWebhookConfig.h files don't define it.
 #ifndef PROTECT_WEBHOOK_ACTION_DEADLINE_MS
 #define PROTECT_WEBHOOK_ACTION_DEADLINE_MS 8000
+#endif
+#ifndef PROTECT_WEBHOOK_BLE_STALL_MS
+#define PROTECT_WEBHOOK_BLE_STALL_MS 30000
 #endif
 
 // Build-time checks of ProtectWebhookConfig.h. The rules must be
@@ -93,6 +98,10 @@ namespace
     constexpr size_t kRules = sizeof(PROTECT_WEBHOOK_RULES) / sizeof(PROTECT_WEBHOOK_RULES[0]);
     int64_t lastAcceptedMs[kRules] = {};
     portMUX_TYPE lock = portMUX_INITIALIZER_UNLOCKED;
+
+    // Last BLE heartbeat (espMillis), 0 = nuki task not running yet.
+    int64_t bleHeartbeatTs = 0;
+    portMUX_TYPE bleHeartbeatMux = portMUX_INITIALIZER_UNLOCKED;
 
     // PROTECT_WEBHOOK_SOURCE_IP in network byte order; 0 = check disabled.
     uint32_t allowedSourceIp = 0;
@@ -181,6 +190,14 @@ void ProtectWebhook::registerRoute(PsychicHttpServer* server, NukiWrapper* nuki)
         return handle(request, resp);
     });
     Log->println("Protect webhook enabled on POST /protect");
+}
+
+void ProtectWebhook::bleHeartbeat()
+{
+    const int64_t now = espMillis();
+    taskENTER_CRITICAL(&bleHeartbeatMux);
+    bleHeartbeatTs = now;
+    taskEXIT_CRITICAL(&bleHeartbeatMux);
 }
 
 bool ProtectWebhook::secretMatches(const String& provided)
@@ -359,7 +376,29 @@ esp_err_t ProtectWebhook::handle(PsychicRequest* request, PsychicResponse* resp)
             Log->printf("Protect webhook: stale event, skew %lld ms\n", (long long)(nowMs - ts));
             continue;
         }
-        // 4. One action at a time. The queue is a single slot, so a second
+        // 4. The nuki task must be alive, or nothing would ever be sent.
+        taskENTER_CRITICAL(&bleHeartbeatMux);
+        const int64_t heartbeat = bleHeartbeatTs;
+        taskEXIT_CRITICAL(&bleHeartbeatMux);
+        if(heartbeat == 0)
+        {
+            Log->println("Protect webhook: BLE not started yet");
+            return reply(resp, 503, "ble_stalled");
+        }
+        if(espMillis() - heartbeat > PROTECT_WEBHOOK_BLE_STALL_MS)
+        {
+            Log->printf("Protect webhook: nuki task stalled for %lld ms, restarting\n",
+                        (long long)(espMillis() - heartbeat));
+#ifdef NUKI_HUB_WAVESHARE_8DI8RO
+            WaveshareBoard::recordBleEvent(WaveshareBoard::BLE_EVENT_STALLED);
+#endif
+            esp_err_t res = reply(resp, 503, "ble_stalled");
+            espDelay(100); // let the reply leave before the reboot
+            restartEsp(RestartReason::BLEError);
+            return res;
+        }
+
+        // 5. One action at a time. The queue is a single slot, so a second
         // action would silently replace the first. Refuse before touching the
         // replay cache and cooldown, so Protect's retry (1 s, 2 s) can still
         // succeed once the lock task is done or the pending action expired.
@@ -369,7 +408,7 @@ esp_err_t ProtectWebhook::handle(PsychicRequest* request, PsychicResponse* resp)
             return reply(resp, 503, "busy");
         }
 
-        // 5. Replay + cooldown, then act.
+        // 6. Replay + cooldown, then act.
         const size_t ruleIndex = rule - PROTECT_WEBHOOK_RULES;
         bool proceed = false;
         taskENTER_CRITICAL(&lock);

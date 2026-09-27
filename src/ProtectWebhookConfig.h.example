@@ -82,3 +82,7 @@ static constexpr ProtectRule PROTECT_WEBHOOK_RULES[] = {
 // attempt or any retry, e.g. lock out of BLE range) is dropped, so a press
 // can't open the door much later. An attempt already in progress still completes.
 #define PROTECT_WEBHOOK_ACTION_DEADLINE_MS 8000
+
+// If the nuki task (BLE) hasn't looped or started a BLE attempt for this long
+// when a matching press arrives, reply 503 ble_stalled and reboot the board.
+#define PROTECT_WEBHOOK_BLE_STALL_MS 30000

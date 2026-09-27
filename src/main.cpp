@@ -12,6 +12,7 @@
 #endif
 #include "Config.h"
 #include "WaveshareBoard.h"
+#include "ProtectWebhook.h"
 #include "esp32-hal-log.h"
 #include "esp32-hal-bt-mem.h"
 #include "hal/wdt_hal.h"
@@ -1265,6 +1266,9 @@ void nukiTask(void *pvParameters)
 
     while (true)
     {
+#ifdef NUKI_HUB_PROTECT_WEBHOOK
+        ProtectWebhook::bleHeartbeat();
+#endif
         processNukiTask();
 
         if(espMillis() - nukiLoopTs > 120000)

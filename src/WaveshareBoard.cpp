@@ -22,7 +22,7 @@ namespace
     constexpr time_t TIME_FLOOR = 1767225600;          // 2026-01-01T00:00:00Z
     RTC_NOINIT_ATTR uint32_t timeSyncedMagic;
 
-    constexpr uint32_t BLE_LOG_MAGIC = 0x424c4531; // "BLE1"
+    constexpr uint32_t BLE_LOG_MAGIC = 0x424c4532; // "BLE2" (layout version)
     constexpr size_t BLE_LOG_SIZE = 10;
 
     struct BleEventEntry
@@ -37,6 +37,7 @@ namespace
         uint32_t magic;
         uint32_t errors;      // since power-on
         uint32_t beaconLost;  // since power-on
+        uint32_t stalled;     // since power-on
         uint32_t next;        // ring index of the next entry
         uint32_t stored;      // entries in the ring, <= BLE_LOG_SIZE
         BleEventEntry events[BLE_LOG_SIZE];
@@ -127,6 +128,10 @@ void WaveshareBoard::recordBleEvent(uint8_t reason)
     {
         bleLog.beaconLost++;
     }
+    else if(reason == BLE_EVENT_STALLED)
+    {
+        bleLog.stalled++;
+    }
     bleLog.events[bleLog.next] = entry;
     bleLog.next = (bleLog.next + 1) % BLE_LOG_SIZE;
     if(bleLog.stored < BLE_LOG_SIZE)
@@ -146,6 +151,7 @@ void WaveshareBoard::printBleEvents(Print& out)
     out.print("\n------------ BLE EVENTS (since power-on, each one rebooted the board) ------------");
     out.printf("\nBLE errors: %u", (unsigned)snapshot.errors);
     out.printf("\nBeacon lost: %u", (unsigned)snapshot.beaconLost);
+    out.printf("\nNuki task stalled (webhook): %u", (unsigned)snapshot.stalled);
     out.printf("\nLast %u (newest first):", (unsigned)snapshot.stored);
     for(uint32_t i = 0; i < snapshot.stored; i++)
     {
@@ -160,7 +166,8 @@ void WaveshareBoard::printBleEvents(Print& out)
         }
         out.printf("\n  %s UTC | uptime %lld s | %s", when, (long long)(e.uptimeMs / 1000),
                    e.reason == BLE_EVENT_ERROR ? "BLE error" :
-                   e.reason == BLE_EVENT_BEACON_LOST ? "beacon lost" : "unknown");
+                   e.reason == BLE_EVENT_BEACON_LOST ? "beacon lost" :
+                   e.reason == BLE_EVENT_STALLED ? "nuki task stalled" : "unknown");
     }
 }
 

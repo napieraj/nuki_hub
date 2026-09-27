@@ -1,5 +1,6 @@
 #include "NukiRetryHandler.h"
 #include "Logger.h"
+#include "../ProtectWebhook.h"
 
 NukiRetryHandler::NukiRetryHandler(std::string reference, Gpio* gpio, std::vector<uint8_t> pinsComm, std::vector<uint8_t> pinsCommError, int nrOfRetries, int retryDelay)
 : _reference(reference),
@@ -22,6 +23,9 @@ const Nuki::CmdResult NukiRetryHandler::retryComm(std::function<Nuki::CmdResult(
     while(retryCount < _nrOfRetries + 1 && cmdResult != Nuki::CmdResult::Success)
     {
         wdtReset();
+#ifdef NUKI_HUB_PROTECT_WEBHOOK
+        ProtectWebhook::bleHeartbeat();
+#endif
 
         cmdResult = func();
 

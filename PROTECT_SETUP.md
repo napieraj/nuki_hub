@@ -138,3 +138,4 @@ would have to hold a Protect API key. The webhook keeps credentials off the lock
 | 429 | `cooldown` | Replayed event, or < 10 s since the last accepted event for the same rule |
 | 503 | `no_time` | Clock not synced yet (Protect retries twice) |
 | 503 | `busy` | Another lock action is still queued or being sent (Protect retries twice) |
+| 503 | `ble_stalled` | The BLE (nuki) task hasn't run for 30 s; the board reboots right after replying (also sent briefly after boot, before BLE starts) |

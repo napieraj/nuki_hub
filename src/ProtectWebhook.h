@@ -20,6 +20,12 @@ class ProtectWebhook
 public:
     static void registerRoute(PsychicHttpServer* server, NukiWrapper* nuki);
 
+    // BLE liveness: called each nuki task loop and before every BLE attempt in
+    // NukiRetryHandler::retryComm. If a matching press finds it older than
+    // PROTECT_WEBHOOK_BLE_STALL_MS, the webhook replies 503 ble_stalled and
+    // reboots the board (the task watchdog would otherwise take 300 s).
+    static void bleHeartbeat();
+
 private:
     static esp_err_t handle(PsychicRequest* request, PsychicResponse* resp);
     static bool secretMatches(const String& provided);

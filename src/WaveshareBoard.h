@@ -74,7 +74,8 @@ namespace WaveshareBoard
     enum BleEvent : uint8_t
     {
         BLE_EVENT_ERROR = 1,       // NukiWrapper::_restartController == 1
-        BLE_EVENT_BEACON_LOST = 2  // NukiWrapper::_restartController == 2
+        BLE_EVENT_BEACON_LOST = 2, // NukiWrapper::_restartController == 2
+        BLE_EVENT_STALLED = 3      // webhook found the nuki task stalled (L13)
     };
     void recordBleEvent(uint8_t reason);
     void printBleEvents(Print& out);
