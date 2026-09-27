@@ -6,6 +6,7 @@
 #include "LockActionResult.h"
 #include "EspMillis.h"
 #include "Logger.h"
+#include "util/NukiHelper.h"
 #include "ArduinoJson.h"
 #include <time.h>
 
@@ -14,6 +15,67 @@ extern bool timeSynced;
 // Older local ProtectWebhookConfig.h files don't define it.
 #ifndef PROTECT_WEBHOOK_ACTION_DEADLINE_MS
 #define PROTECT_WEBHOOK_ACTION_DEADLINE_MS 8000
+#endif
+
+// Build-time checks of ProtectWebhookConfig.h. The rules must be
+// "static constexpr" for these to see them.
+namespace ProtectWebhookCheck
+{
+    constexpr size_t len(const char* s)
+    {
+        size_t n = 0;
+        while(s[n] != 0) n++;
+        return n;
+    }
+
+    constexpr bool set(const char* s)
+    {
+        return s != nullptr && s[0] != 0;
+    }
+
+    constexpr bool isPlaceholder(const char* s)
+    {
+        const char* p = "replace";
+        if(s == nullptr) return false;
+        for(size_t i = 0; p[i] != 0; i++)
+        {
+            if(s[i] != p[i]) return false;
+        }
+        return true;
+    }
+
+    template<typename F> constexpr bool allRules(F f)
+    {
+        for(const ProtectRule& r : PROTECT_WEBHOOK_RULES)
+        {
+            if(!f(r)) return false;
+        }
+        return true;
+    }
+}
+
+static_assert(ProtectWebhookCheck::len(PROTECT_WEBHOOK_SECRET) >= 32,
+              "PROTECT_WEBHOOK_SECRET must be at least 32 characters (openssl rand -hex 32)");
+static_assert(ProtectWebhookCheck::allRules([](const ProtectRule& r) { return ProtectWebhookCheck::set(r.device); }),
+              "every Protect rule needs a device (the fob's MAC)");
+static_assert(ProtectWebhookCheck::allRules([](const ProtectRule& r) { return ProtectWebhookCheck::set(r.action); }),
+              "every Protect rule needs an action");
+static_assert(ProtectWebhookCheck::allRules([](const ProtectRule& r) { return r.value == nullptr || ProtectWebhookCheck::set(r.field); }),
+              "a Protect rule with 'value' needs 'field'");
+static_assert(ProtectWebhookCheck::allRules([](const ProtectRule& r) { return r.value2 == nullptr || ProtectWebhookCheck::set(r.field2); }),
+              "a Protect rule with 'value2' needs 'field2'");
+static_assert(ProtectWebhookCheck::allRules([](const ProtectRule& r) { return r.token == nullptr || ProtectWebhookCheck::len(r.token) >= 16; }),
+              "Protect rule tokens must be at least 16 characters (openssl rand -hex 16)");
+#ifndef PROTECT_WEBHOOK_ALLOW_BROAD_RULES
+static_assert(ProtectWebhookCheck::allRules([](const ProtectRule& r) { return r.token != nullptr || (ProtectWebhookCheck::set(r.key) && r.value != nullptr); }),
+              "a Protect rule without a token needs key + value, or it matches ANY event from that fob "
+              "(define PROTECT_WEBHOOK_ALLOW_BROAD_RULES to allow that)");
+#endif
+#ifndef PROTECT_WEBHOOK_ALLOW_PLACEHOLDERS
+static_assert(!ProtectWebhookCheck::isPlaceholder(PROTECT_WEBHOOK_SECRET),
+              "PROTECT_WEBHOOK_SECRET is still the placeholder from the example");
+static_assert(ProtectWebhookCheck::allRules([](const ProtectRule& r) { return !ProtectWebhookCheck::isPlaceholder(r.token); }),
+              "a Protect rule token is still the placeholder from the example");
 #endif
 
 NukiWrapper* ProtectWebhook::_nuki = nullptr;
@@ -44,6 +106,22 @@ void ProtectWebhook::registerRoute(PsychicHttpServer* server, NukiWrapper* nuki)
     {
         return;
     }
+    // Fail closed: one rule with an unknown action disables the whole route.
+    bool rulesValid = true;
+    for(const ProtectRule& r : PROTECT_WEBHOOK_RULES)
+    {
+        if((int)NukiHelper::lockActionToEnum(r.action) == 0xff)
+        {
+            Log->printf("Protect webhook: unknown action '%s' in ProtectWebhookConfig.h\n", r.action);
+            rulesValid = false;
+        }
+    }
+    if(!rulesValid)
+    {
+        Log->println("Protect webhook disabled: fix ProtectWebhookConfig.h");
+        return;
+    }
+
     _nuki = nuki;
     server->on("/protect", HTTP_POST, [](PsychicRequest* request, PsychicResponse* resp)
     {

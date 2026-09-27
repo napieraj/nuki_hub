@@ -55,6 +55,13 @@ Copy `src/ProtectWebhookConfig.h.example` to `src/ProtectWebhookConfig.h`:
   `{ "<token>", "sensor_button_pressed", "<fob MAC>", "button", "right", "value", "longPress", "unlock" }`.
   One fob per person, so the fob is the identity.
 
+The build checks the config and stops with a clear error if the secret or a token
+is still a placeholder or too short, a rule lacks a device or action, or a rule
+would match any event from a fob. At boot, an unknown action disables `/protect`
+(logged). **Existing config from before this check:** change
+`static const ProtectRule PROTECT_WEBHOOK_RULES[]` to `static constexpr ...`, and
+optionally add `#define PROTECT_WEBHOOK_ACTION_DEADLINE_MS 8000`.
+
 In Nuki Hub → **Nuki Lock Access Control**, allow exactly the actions your rules use.
 
 ### 3. Point the alarms at the board
