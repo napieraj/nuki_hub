@@ -2,6 +2,7 @@
 
 #include "ProtectWebhook.h"
 #include "ProtectWebhookConfig.h"
+#include "ProtectWebhookLogic.h"
 #include "NukiWrapper.h"
 #include "LockActionResult.h"
 #include "EspMillis.h"
@@ -89,14 +90,14 @@ NukiWrapper* ProtectWebhook::_nuki = nullptr;
 
 namespace
 {
+    using namespace ProtectWebhookLogic;
+
     constexpr size_t kMaxBody = 4096;
-    constexpr size_t kSeenEvents = 16;
-    char seen[kSeenEvents][64] = {};
-    size_t seenNext = 0;
-    // Cooldown per rule (index into PROTECT_WEBHOOK_RULES), so "hold to unlock"
-    // followed by "press to lock" isn't blocked. 0 = never accepted.
+    // Replay cache for the last 16 event IDs, plus a cooldown per rule (index
+    // into PROTECT_WEBHOOK_RULES), so "hold to unlock" followed by "press to
+    // lock" isn't blocked. Guarded by `lock`.
     constexpr size_t kRules = sizeof(PROTECT_WEBHOOK_RULES) / sizeof(PROTECT_WEBHOOK_RULES[0]);
-    int64_t lastAcceptedMs[kRules] = {};
+    ReplayGuard<kRules> replayGuard;
     portMUX_TYPE lock = portMUX_INITIALIZER_UNLOCKED;
 
     // Last BLE heartbeat (espMillis), 0 = nuki task not running yet.
@@ -227,23 +228,6 @@ bool ProtectWebhook::secretMatches(const String& provided)
     return diff == 0;
 }
 
-bool ProtectWebhook::macMatches(const char* a, const char* b)
-{
-    auto next = [](const char*& p) -> int
-    {
-        while(*p && !isxdigit((unsigned char)*p)) p++;
-        return *p ? tolower((unsigned char)*p++) : 0;
-    };
-    int ca, cb;
-    do
-    {
-        ca = next(a);
-        cb = next(b);
-        if(ca != cb) return false;
-    } while(ca != 0);
-    return true;
-}
-
 namespace
 {
     // A string field, or the Integration API style {"text": "..."} wrapper.
@@ -259,22 +243,6 @@ namespace
         }
         return nullptr;
     }
-
-    // Protect sends milliseconds. A value below 1e11 can only be seconds
-    // (1e11 ms is 1973). Negative, zero or after 2100 is treated as missing,
-    // which keeps the skew arithmetic below far from overflow.
-    int64_t normalizeTimestampMs(int64_t ts)
-    {
-        if(ts <= 0)
-        {
-            return 0;
-        }
-        if(ts < 100000000000LL)
-        {
-            ts *= 1000;
-        }
-        return ts > 4102444800000LL ? 0 : ts;
-    }
 }
 
 bool ProtectWebhook::fieldEquals(JsonVariantConst v, const char* want)
@@ -284,42 +252,13 @@ bool ProtectWebhook::fieldEquals(JsonVariantConst v, const char* want)
     const char* text = fieldText(v);
     if(text != nullptr)
     {
-        return strcasecmp(text, want) == 0;
+        return textEquals(text, want);
     }
     if(v.is<long long>())
     {
-        char buf[24];
-        snprintf(buf, sizeof(buf), "%lld", v.as<long long>());
-        return strcmp(buf, want) == 0;
+        return numberEquals(v.as<long long>(), want);
     }
     return false;
-}
-
-bool ProtectWebhook::eventSeen(const char* eventId)
-{
-    for(size_t i = 0; i < kSeenEvents; i++)
-    {
-        // Stored IDs are truncated to 63 chars; compare the same way.
-        if(seen[i][0] != 0 && strncmp(seen[i], eventId, sizeof(seen[0]) - 1) == 0) return true;
-    }
-    return false;
-}
-
-void ProtectWebhook::rememberEvent(const char* eventId)
-{
-    strlcpy(seen[seenNext], eventId, sizeof(seen[0]));
-    seenNext = (seenNext + 1) % kSeenEvents;
-}
-
-namespace
-{
-    bool ctEquals(const char* a, const char* b)
-    {
-        const size_t la = strlen(a), lb = strlen(b);
-        uint8_t diff = (uint8_t)(la != lb);
-        for(size_t i = 0; i < la && i < lb; i++) diff |= (uint8_t)a[i] ^ (uint8_t)b[i];
-        return diff == 0;
-    }
 }
 
 esp_err_t ProtectWebhook::handle(PsychicRequest* request, PsychicResponse* resp)
@@ -393,27 +332,15 @@ esp_err_t ProtectWebhook::handle(PsychicRequest* request, PsychicResponse* resp)
         int64_t ts = normalizeTimestampMs(t["timestamp"] | (int64_t)0);
         if(ts == 0) ts = envelopeTs;
 
-        // Without an eventId, the (timestamp, key, device) tuple identifies the event.
         char synthId[64];
-        const char* eventId = t["eventId"] | "";
-        if(eventId[0] == 0)
-        {
-            snprintf(synthId, sizeof(synthId), "%lld|%s|%s", (long long)ts, key, device);
-            eventId = synthId;
-        }
+        const char* eventId = eventIdOrSynth(t["eventId"] | "", ts, key, device, synthId, sizeof(synthId));
 
-        const ProtectRule* rule = nullptr;
-        for(const ProtectRule& r : PROTECT_WEBHOOK_RULES)
+        const int ruleIndex = findRule(PROTECT_WEBHOOK_RULES, ruleToken.c_str(), key, device,
+                                       [&t](const char* field, const char* want)
         {
-            if(r.token != nullptr && !ctEquals(ruleToken.c_str(), r.token)) continue;
-            if(r.key != nullptr && strcmp(key, r.key) != 0) continue;
-            if(!macMatches(device, r.device)) continue;
-            if(r.value != nullptr && !fieldEquals(t[r.field], r.value)) continue;
-            if(r.value2 != nullptr && !fieldEquals(t[r.field2], r.value2)) continue;
-            rule = &r;
-            break;
-        }
-        if(rule == nullptr)
+            return fieldEquals(t[field], want);
+        });
+        if(ruleIndex < 0)
         {
             // Authenticated but unmatched: log what arrived (never the secret
             // or token) so a changed Protect payload is easy to spot.
@@ -423,7 +350,8 @@ esp_err_t ProtectWebhook::handle(PsychicRequest* request, PsychicResponse* resp)
                         key, device, button ? button : "", value ? value : "");
             continue;
         }
-        if(ts == 0 || llabs(nowMs - ts) > PROTECT_WEBHOOK_MAX_SKEW_MS)
+        const ProtectRule* rule = &PROTECT_WEBHOOK_RULES[ruleIndex];
+        if(!isFresh(nowMs, ts, PROTECT_WEBHOOK_MAX_SKEW_MS))
         {
             Log->printf("Protect webhook: stale event, skew %lld ms\n", (long long)(nowMs - ts));
             continue;
@@ -461,17 +389,9 @@ esp_err_t ProtectWebhook::handle(PsychicRequest* request, PsychicResponse* resp)
         }
 
         // 6. Replay + cooldown, then act.
-        const size_t ruleIndex = rule - PROTECT_WEBHOOK_RULES;
-        bool proceed = false;
-        taskENTER_CRITICAL(&lock);
         const int64_t m = espMillis();
-        if(!eventSeen(eventId) &&
-           (lastAcceptedMs[ruleIndex] == 0 || m - lastAcceptedMs[ruleIndex] >= PROTECT_WEBHOOK_COOLDOWN_MS))
-        {
-            rememberEvent(eventId);
-            lastAcceptedMs[ruleIndex] = m;
-            proceed = true;
-        }
+        taskENTER_CRITICAL(&lock);
+        const bool proceed = replayGuard.accept(eventId, (size_t)ruleIndex, m, PROTECT_WEBHOOK_COOLDOWN_MS);
         taskEXIT_CRITICAL(&lock);
         if(!proceed)
         {

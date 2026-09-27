@@ -40,6 +40,9 @@ jobs:
       - name: Check Python scripts
         run: python -m py_compile scripts/*.py
 
+      - name: Host tests (Protect webhook logic)
+        run: pio test -e native
+
       - name: Use the example webhook config
         run: cp src/ProtectWebhookConfig.h.example src/ProtectWebhookConfig.h
 

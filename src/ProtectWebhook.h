@@ -36,10 +36,7 @@ public:
 private:
     static esp_err_t handle(PsychicRequest* request, PsychicResponse* resp);
     static bool secretMatches(const String& provided);
-    static bool macMatches(const char* a, const char* b);
     static bool fieldEquals(JsonVariantConst v, const char* want);
-    static bool eventSeen(const char* eventId);
-    static void rememberEvent(const char* eventId);
 
     static NukiWrapper* _nuki;
 };

@@ -91,6 +91,11 @@ One alarm per rule (e.g. "Fob A - Hold Right", "Fob A - Press Right"):
   (`PROTECT_WEBHOOK_ACTION_DEADLINE_MS`) is dropped and the log shows
   `Lock action expired`, so the door never opens long after the press.
 
+### Host tests
+`pio test -e native` runs the rule matching, timestamp, replay and per-rule
+cooldown logic (`src/ProtectWebhookLogic.h`) on your computer, with the same
+cases as the bench suite below. CI runs it on every push.
+
 ### 5. Bench test without moving the lock
 1. In **Nuki Lock Access Control**, untick the action the rule uses (and the
    second rule's action, if you pass `--token2`). If it stays ticked, the
