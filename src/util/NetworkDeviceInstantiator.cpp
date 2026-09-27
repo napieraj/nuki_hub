@@ -1,6 +1,6 @@
 #include "NetworkDeviceInstantiator.h"
 #include "../networkDevices/EthernetDevice.h"
-#ifndef CONFIG_IDF_TARGET_ESP32H2
+#if !defined(CONFIG_IDF_TARGET_ESP32H2) && !defined(NUKI_HUB_NO_WIFI)
 #include "../networkDevices/WifiDevice.h"
 #endif
 #include "../PreferencesKeys.h"
@@ -177,7 +177,7 @@ NetworkDevice *NetworkDeviceInstantiator::Create(NetworkDeviceType networkDevice
                                         custCLK);
         }
 #endif
-#ifndef CONFIG_IDF_TARGET_ESP32H2
+#if !defined(CONFIG_IDF_TARGET_ESP32H2) && !defined(NUKI_HUB_NO_WIFI)
         else
         {
             #if defined(CONFIG_ESP_HOSTED_ENABLE_BT_NIMBLE) || defined(CONFIG_ESP_WIFI_REMOTE_ENABLED)
@@ -214,7 +214,7 @@ NetworkDevice *NetworkDeviceInstantiator::Create(NetworkDeviceType networkDevice
         device = new EthernetDevice(hostname, preferences, ipConfiguration, "LilyGO T-ETH-POE", 0, -1, ETH_PHY_MDC_LAN8720, ETH_PHY_MDIO_LAN8720, ETH_PHY_TYPE_LAN8720, ETH_CLOCK_GPIO17_OUT);
         break;
 #endif
-#ifndef CONFIG_IDF_TARGET_ESP32H2
+#if !defined(CONFIG_IDF_TARGET_ESP32H2) && !defined(NUKI_HUB_NO_WIFI)
     case NetworkDeviceType::WiFi:
         #if defined(CONFIG_ESP_HOSTED_ENABLE_BT_NIMBLE) || defined(CONFIG_ESP_WIFI_REMOTE_ENABLED)
         if (!hostedIsWiFiActive())

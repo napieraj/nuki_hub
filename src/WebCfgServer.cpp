@@ -14,7 +14,7 @@
 #ifdef NUKI_HUB_HTTPS_SERVER
 #include "util/SSLCert.hpp"
 #endif
-#ifndef CONFIG_IDF_TARGET_ESP32H2
+#if !defined(CONFIG_IDF_TARGET_ESP32H2) && !defined(NUKI_HUB_NO_WIFI)
 #include <esp_wifi.h>
 #include <WiFi.h>
 #endif
@@ -449,7 +449,7 @@ void WebCfgServer::initialize()
 
     if(_network->isApOpen())
     {
-#ifndef CONFIG_IDF_TARGET_ESP32H2
+#if !defined(CONFIG_IDF_TARGET_ESP32H2) && !defined(NUKI_HUB_NO_WIFI)
         _psychicServer->on("/get", HTTP_GET, [&](PsychicRequest *request, PsychicResponse* resp)
         {
             String value = "";
@@ -941,7 +941,7 @@ void WebCfgServer::initialize()
             {
                 return buildGpioConfigHtml(request, resp);
             }
-#ifndef CONFIG_IDF_TARGET_ESP32H2
+#if !defined(CONFIG_IDF_TARGET_ESP32H2) && !defined(NUKI_HUB_NO_WIFI)
             else if (value == "wifi")
             {
                 return buildConfigureWifiHtml(request, resp);
@@ -1258,7 +1258,7 @@ void WebCfgServer::initialize()
 #endif
             else
             {
-#ifndef CONFIG_IDF_TARGET_ESP32H2
+#if !defined(CONFIG_IDF_TARGET_ESP32H2) && !defined(NUKI_HUB_NO_WIFI)
                 if(!_network->isApOpen())
                 {
 #endif
@@ -1267,7 +1267,7 @@ void WebCfgServer::initialize()
 #else
                     return buildOtaHtml(request, resp);
 #endif
-#ifndef CONFIG_IDF_TARGET_ESP32H2
+#if !defined(CONFIG_IDF_TARGET_ESP32H2) && !defined(NUKI_HUB_NO_WIFI)
                 }
 
                 return buildWifiConnectHtml(request, resp);
@@ -1399,7 +1399,7 @@ void WebCfgServer::initialize()
             break;
         }
 
-#ifndef CONFIG_IDF_TARGET_ESP32H2
+#if !defined(CONFIG_IDF_TARGET_ESP32H2) && !defined(NUKI_HUB_NO_WIFI)
         if(!_network->isApOpen())
         {
 #endif
@@ -1408,7 +1408,7 @@ void WebCfgServer::initialize()
 #else
             return buildOtaHtml(request, resp);
 #endif
-#ifndef CONFIG_IDF_TARGET_ESP32H2
+#if !defined(CONFIG_IDF_TARGET_ESP32H2) && !defined(NUKI_HUB_NO_WIFI)
         }
         else
         {
@@ -1441,7 +1441,7 @@ void WebCfgServer::printCheckBox(PsychicStreamResponse *response, const char *to
     response->print("/></td></tr>");
 }
 
-#ifndef CONFIG_IDF_TARGET_ESP32H2
+#if !defined(CONFIG_IDF_TARGET_ESP32H2) && !defined(NUKI_HUB_NO_WIFI)
 esp_err_t WebCfgServer::buildSSIDListHtml(PsychicRequest *request, PsychicResponse* resp)
 {
     _network->scan(true, false);
@@ -5132,7 +5132,7 @@ esp_err_t WebCfgServer::buildHtml(PsychicRequest *request, PsychicResponse* resp
     {
         buildNavigationMenuEntry(&response, "Open Webserial", "/webserial");
     }
-#ifndef CONFIG_IDF_TARGET_ESP32H2
+#if !defined(CONFIG_IDF_TARGET_ESP32H2) && !defined(NUKI_HUB_NO_WIFI)
     if(_allowRestartToPortal)
     {
         buildNavigationMenuEntry(&response, "Configure Wi-Fi", "/get?page=wifi");
@@ -5277,7 +5277,7 @@ esp_err_t WebCfgServer::buildCredHtml(PsychicRequest *request, PsychicResponse* 
     }
     response.print("<br><br><h3>Factory reset Nuki Hub</h3>");
     response.print("<h4 class=\"warning\">This will reset all settings to default and unpair Nuki Lock and/or Opener.");
-#ifndef CONFIG_IDF_TARGET_ESP32H2
+#if !defined(CONFIG_IDF_TARGET_ESP32H2) && !defined(NUKI_HUB_NO_WIFI)
     response.print(" Optionally will also reset WiFi settings and reopen WiFi manager portal.");
 #endif
     response.print("</h4>");
@@ -5288,7 +5288,7 @@ esp_err_t WebCfgServer::buildCredHtml(PsychicRequest *request, PsychicResponse* 
     message.concat(_confirmCode);
     message.concat(" to confirm factory reset");
     printInputField(&response, "CONFIRMTOKEN", message.c_str(), "", 10, "");
-#ifndef CONFIG_IDF_TARGET_ESP32H2
+#if !defined(CONFIG_IDF_TARGET_ESP32H2) && !defined(NUKI_HUB_NO_WIFI)
     printCheckBox(&response, "WIFI", "Also reset WiFi settings", false, "");
 #endif
     response.print("</table>");
@@ -5309,7 +5309,7 @@ esp_err_t WebCfgServer::buildNetworkConfigHtml(PsychicRequest *request, PsychicR
     printInputField(&response, "HOSTNAME", "Hostname (needs to be unique)", _preferences->getString(preference_hostname).c_str(), 100, "");
     printDropDown(&response, "NWHW", "Network hardware", String(_preferences->getInt(preference_network_hardware)), getNetworkDetectionOptions(), "");
     printInputField(&response, "HASSCUURL", "Home Assistant device configuration URL (empty to use http://LOCALIP; fill when using a reverse proxy for example)", _preferences->getString(preference_mqtt_hass_cu_url).c_str(), 261, "");
-#ifndef CONFIG_IDF_TARGET_ESP32H2
+#if !defined(CONFIG_IDF_TARGET_ESP32H2) && !defined(NUKI_HUB_NO_WIFI)
     printInputField(&response, "RSSI", "RSSI Publish interval (seconds; -1 to disable)", _preferences->getInt(preference_rssi_publish_interval), 6, "");
 #endif
     printCheckBox(&response, "RSTDISC", "Restart on disconnect", _preferences->getBool(preference_restart_on_disconnect), "");
@@ -6088,7 +6088,7 @@ esp_err_t WebCfgServer::buildGpioConfigHtml(PsychicRequest *request, PsychicResp
     return response.endSend();
 }
 
-#ifndef CONFIG_IDF_TARGET_ESP32H2
+#if !defined(CONFIG_IDF_TARGET_ESP32H2) && !defined(NUKI_HUB_NO_WIFI)
 esp_err_t WebCfgServer::buildConfigureWifiHtml(PsychicRequest *request, PsychicResponse* resp)
 {
     PsychicStreamResponse response(resp, "text/html");
@@ -6292,7 +6292,7 @@ esp_err_t WebCfgServer::buildInfoHtml(PsychicRequest *request, PsychicResponse* 
 
         if(_network->networkDeviceName() == "Built-in Wi-Fi")
         {
-#ifndef CONFIG_IDF_TARGET_ESP32H2
+#if !defined(CONFIG_IDF_TARGET_ESP32H2) && !defined(NUKI_HUB_NO_WIFI)
             response.print("\nSSID: <span class=\"redact\">");
             response.print(WiFi.SSID());
             response.print("</span>");
@@ -7071,7 +7071,7 @@ esp_err_t WebCfgServer::processFactoryReset(PsychicRequest *request, PsychicResp
     _network->disableHASS();
     _preferences->clear();
 
-#ifndef CONFIG_IDF_TARGET_ESP32H2
+#if !defined(CONFIG_IDF_TARGET_ESP32H2) && !defined(NUKI_HUB_NO_WIFI)
     if(!resetWifi)
     {
         _preferences->putString(preference_wifi_ssid, ssid);

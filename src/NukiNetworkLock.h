@@ -1,7 +1,7 @@
 #pragma once
 
 #include "networkDevices/NetworkDevice.h"
-#ifndef CONFIG_IDF_TARGET_ESP32H2
+#if !defined(CONFIG_IDF_TARGET_ESP32H2) && !defined(NUKI_HUB_NO_WIFI)
 #include "networkDevices/WifiDevice.h"
 #endif
 #include <Preferences.h>

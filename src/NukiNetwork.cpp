@@ -7,8 +7,13 @@
 #include <HTTPClient.h>
 #include <NetworkClientSecure.h>
 #include "util/NetworkDeviceInstantiator.h"
-#ifndef CONFIG_IDF_TARGET_ESP32H2
+#if !defined(CONFIG_IDF_TARGET_ESP32H2) && !defined(NUKI_HUB_NO_WIFI)
 #include "networkDevices/WifiDevice.h"
+#endif
+#if defined(NUKI_HUB_NO_WIFI) && !defined(NUKI_HUB_WAVESHARE_8DI8RO)
+// Without WifiDevice, an unknown or Wi-Fi network hardware setting has nothing
+// to fall back to; only a build that pins its Ethernet hardware may drop Wi-Fi.
+#error "NUKI_HUB_NO_WIFI needs a board build that pins its Ethernet hardware (NUKI_HUB_WAVESHARE_8DI8RO)"
 #endif
 #include "networkDevices/EthernetDevice.h"
 #include "hal/wdt_hal.h"

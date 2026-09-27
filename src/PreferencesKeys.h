@@ -8,7 +8,7 @@
 #include "RestartReason.h"
 #include "util/CertUtil.h"
 
-#ifndef CONFIG_IDF_TARGET_ESP32H2
+#if !defined(CONFIG_IDF_TARGET_ESP32H2) && !defined(NUKI_HUB_NO_WIFI)
 #include <WiFi.h>
 #endif
 
@@ -296,7 +296,7 @@ inline void initPreferences(Preferences* preferences)
         preferences->putInt(preference_cred_bypass_gpio_high, -1);
         preferences->putInt(preference_cred_bypass_gpio_low, -1);
 
-#ifndef CONFIG_IDF_TARGET_ESP32H2
+#if !defined(CONFIG_IDF_TARGET_ESP32H2) && !defined(NUKI_HUB_NO_WIFI)
         WiFi.begin();
         WiFi.disconnect(true, true);
 #endif

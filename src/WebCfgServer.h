@@ -71,7 +71,7 @@ private:
     esp_err_t buildAdvancedConfigHtml(PsychicRequest *request, PsychicResponse* resp);
     esp_err_t buildNukiConfigHtml(PsychicRequest *request, PsychicResponse* resp);
     esp_err_t buildGpioConfigHtml(PsychicRequest *request, PsychicResponse* resp);
-#ifndef CONFIG_IDF_TARGET_ESP32H2
+#if !defined(CONFIG_IDF_TARGET_ESP32H2) && !defined(NUKI_HUB_NO_WIFI)
     esp_err_t buildConfigureWifiHtml(PsychicRequest *request, PsychicResponse* resp);
 #endif
     esp_err_t buildInfoHtml(PsychicRequest *request, PsychicResponse* resp);
@@ -135,7 +135,7 @@ private:
     void waitAndProcess(const bool blocking, const uint32_t duration);
     esp_err_t handleOtaUpload(PsychicRequest *request, const String& filename, uint64_t index, uint8_t *data, size_t len, bool final);
     void printCheckBox(PsychicStreamResponse *response, const char* token, const char* description, const bool value, const char* htmlClass);
-#ifndef CONFIG_IDF_TARGET_ESP32H2
+#if !defined(CONFIG_IDF_TARGET_ESP32H2) && !defined(NUKI_HUB_NO_WIFI)
     esp_err_t buildWifiConnectHtml(PsychicRequest *request, PsychicResponse* resp);
     bool processWiFi(PsychicRequest *request, PsychicResponse* resp, String& message);
 
