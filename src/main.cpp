@@ -1798,6 +1798,14 @@ void setup()
         serialReader = new SerialReader(importExport, network);
 #endif
     }
+#if defined(NUKI_HUB_PROTECT_WEBHOOK) && !defined(NUKI_HUB_UPDATER)
+    // This board never opens the AP. The USB console is the physical recovery
+    // path for the fork settings page ("forkcfg unlock", "forkcfg off").
+    if(serialReader == nullptr)
+    {
+        serialReader = new SerialReader(importExport, network);
+    }
+#endif
 
     if(lockEnabled || openerEnabled)
     {

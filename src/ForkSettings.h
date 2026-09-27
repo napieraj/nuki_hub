@@ -62,6 +62,11 @@ namespace ForkSettings
     // "require TOTP". Physical access (USB) is the recovery path.
     bool serialUnlock();
 
+    // Master switch off, nothing else changed and no validation, so it works
+    // even with the settings lock on or a stored config that no longer
+    // validates (web page button, serial "forkcfg off").
+    bool switchOff();
+
     // Nuki Hub factory reset: erase the namespace (the header, if any, seeds
     // again at the next boot).
     void factoryReset();

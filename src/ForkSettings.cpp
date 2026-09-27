@@ -399,28 +399,50 @@ bool ForkSettings::save(const Settings& s, char* err, size_t errLen)
     return true;
 }
 
+namespace
+{
+    // Store and apply a modified copy of the current settings, without
+    // validation (only for changes that can't make them less safe).
+    template<typename F> bool modifyUnchecked(F change)
+    {
+        if(mutex == nullptr || xSemaphoreTake(mutex, pdMS_TO_TICKS(5000)) != pdTRUE)
+        {
+            return false;
+        }
+        auto s = newSettings();
+        bool ok = false;
+        if(s)
+        {
+            *s = current;
+            change(*s);
+            ok = store(*s);
+            if(ok)
+            {
+                applyLocked(*s);
+                loadedFrom = ForkSettings::Source::Nvs;
+            }
+        }
+        xSemaphoreGive(mutex);
+        return ok;
+    }
+}
+
 bool ForkSettings::serialUnlock()
 {
-    if(mutex == nullptr || xSemaphoreTake(mutex, pdMS_TO_TICKS(5000)) != pdTRUE)
+    // A stored config that fails validation must still be unlockable to be fixed.
+    const bool ok = modifyUnchecked([](Settings& s)
     {
-        return false;
-    }
-    auto s = newSettings();
-    bool ok = false;
-    if(s)
-    {
-        *s = current;
-        s->lockDi = 0;
-        s->requireTotp = false;
-        // No validation: this only relaxes two options, and a stored config
-        // that fails validation must still be unlockable to be fixed.
-        ok = store(*s);
-        if(ok)
-        {
-            applyLocked(*s);
-        }
-    }
-    xSemaphoreGive(mutex);
+        s.lockDi = 0;
+        s.requireTotp = false;
+    });
+    Log->println(ok ? "Fork settings: unlocked from the serial console" : "Fork settings: unlock failed");
+    return ok;
+}
+
+bool ForkSettings::switchOff()
+{
+    const bool ok = modifyUnchecked([](Settings& s) { s.enabled = false; });
+    Log->println(ok ? "Protect webhook switched off" : "Protect webhook: switching off failed");
     return ok;
 }
 

@@ -2,6 +2,7 @@
 #include "RestartReason.h"
 #include "EspMillis.h"
 #include "hal/wdt_hal.h"
+#include "ForkSettings.h"
 
 SerialReader::SerialReader(ImportExport *importExport, NukiNetwork* network)
     : _importExport(importExport),
@@ -30,6 +31,24 @@ void SerialReader::update()
         }
         _lastCommandTs = ts;
 
+
+#ifdef NUKI_HUB_PROTECT_WEBHOOK
+        {
+            // USB console recovery for the fork settings page (physical access).
+            String cmd = line;
+            cmd.trim();
+            if(cmd == "forkcfg unlock")
+            {
+                Serial.println(ForkSettings::serialUnlock() ? "Fork settings: settings lock and TOTP requirement off"
+                                                            : "Fork settings: unlock failed");
+            }
+            else if(cmd == "forkcfg off")
+            {
+                Serial.println(ForkSettings::switchOff() ? "Protect webhook switched off"
+                                                         : "Protect webhook: switching off failed");
+            }
+        }
+#endif
 
         if(line == "reset")
         {
