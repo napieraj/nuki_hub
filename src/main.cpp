@@ -1529,6 +1529,11 @@ void setup()
     esp_log_level_set("mqtt", ESP_LOG_NONE);
     //Start Serial and setup Log class
     Serial.begin(115200);
+#if defined(NUKI_HUB_WAVESHARE_8DI8RO) && ARDUINO_USB_CDC_ON_BOOT && ARDUINO_USB_MODE
+    // Serial is the USB-Serial/JTAG port (HWCDC). With USB plugged into a host
+    // that isn't reading, each write would wait up to 20 x 100 ms; drop instead.
+    Serial.setTxTimeoutMs(0);
+#endif
     Log = &Serial;
 
 #if !defined(NUKI_HUB_UPDATER) && !defined(CONFIG_IDF_TARGET_ESP32C5)
