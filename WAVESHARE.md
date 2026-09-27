@@ -11,6 +11,10 @@ from a UniFi Protect Alarm Manager webhook. No Wi-Fi, no MQTT broker needed.
   reset pulse. `-DWAVESHARE_ETH_IRQ=-1` switches the W5500 to 10 ms polling. Web UI changes and the
   bootloop reset cannot switch it to Wi-Fi. Wi-Fi fallback is disabled: if the
   W5500 fails the ESP reboots and retries. The `NukiHub` access point never opens.
+- The WS2812 (GPIO 38) flashes after each authenticated webhook call: short
+  **green** = action queued, **red** = no rule matched (or stale) or refused by the
+  ACL. Busy, cooldown and replays don't flash. If the colours are swapped, build
+  with `-DWAVESHARE_LED_ORDER=LED_COLOR_ORDER_RGB`.
 - The eight relays (TCA9554 @ 0x20, I2C SDA 42 / SCL 41) are forced off first thing in `setup()`.
 - GPIO 0 (BOOT), 38 (WS2812), 41/42 (I2C) and 46 (buzzer, strapping pin) can't be
   given a GPIO role. The eight digital inputs DI1-8 are GPIO 4-11 (dry contact to

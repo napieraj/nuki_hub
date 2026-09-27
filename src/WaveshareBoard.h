@@ -10,6 +10,7 @@
 //  - The eight relays (TCA9554 on I2C) are forced off before anything else runs,
 //    and the W5500 gets a full hardware reset pulse (its RSTn is on GPIO39).
 //  - BLE TX power defaults to +9 dBm when unset (upstream would silently use +3).
+//  - The WS2812 flashes green/red after each authenticated webhook call.
 //  - "Time synced" survives software resets (the webhook needs a valid clock).
 //  - BLE errors and beacon losses (each reboots the board) are logged in
 //    RTC memory and listed on the info page.
@@ -47,6 +48,9 @@ namespace WaveshareBoard
     constexpr int I2C_SCL = 41;
     constexpr uint8_t TCA9554_ADDR = 0x20;
 
+    // WS2812 status LED
+    constexpr int STATUS_LED = 38;
+
     // Core for everything network-facing (httpd, lwIP, network task).
     constexpr int NETWORK_CORE = 1;
 
@@ -78,6 +82,10 @@ namespace WaveshareBoard
         BLE_EVENT_STALLED = 3      // webhook found the nuki task stalled (L13)
     };
     void recordBleEvent(uint8_t reason);
+
+    // Short flash on the WS2812 (GPIO 38) after an authenticated webhook:
+    // green = action queued, red = no rule matched or refused. Non-blocking.
+    void flashStatusLed(bool ok);
     void printBleEvents(Print& out);
 
     // Board defaults, run on every boot after initPreferences(): forces the

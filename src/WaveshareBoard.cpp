@@ -7,6 +7,13 @@
 #include "esp_attr.h"
 #include "esp_system.h"
 #include "EspMillis.h"
+#include "esp_timer.h"
+
+// WS2812 colour order; build with -DWAVESHARE_LED_ORDER=LED_COLOR_ORDER_RGB if
+// "green" shows red.
+#ifndef WAVESHARE_LED_ORDER
+#define WAVESHARE_LED_ORDER LED_COLOR_ORDER_GRB
+#endif
 
 namespace
 {
@@ -63,6 +70,13 @@ namespace
         }
     }
 
+    esp_timer_handle_t statusLedOffTimer = nullptr;
+
+    void statusLedOff(void*)
+    {
+        rgbLedWriteOrdered(WaveshareBoard::STATUS_LED, WAVESHARE_LED_ORDER, 0, 0, 0);
+    }
+
     // Only write when the stored value differs, to spare flash.
     void putIntIfDifferent(Preferences* p, const char* key, int value, bool& changed)
     {
@@ -85,6 +99,9 @@ void WaveshareBoard::earlyInit()
     Wire.end();
 
     initBleLog();
+
+    // The WS2812 can latch random data at power-up.
+    statusLedOff(nullptr);
 
     // W5500 hardware reset. An ESP32 reset alone does not reset the W5500.
     pinMode(ETH_RST, OUTPUT);
@@ -169,6 +186,25 @@ void WaveshareBoard::printBleEvents(Print& out)
                    e.reason == BLE_EVENT_BEACON_LOST ? "beacon lost" :
                    e.reason == BLE_EVENT_STALLED ? "nuki task stalled" : "unknown");
     }
+}
+
+void WaveshareBoard::flashStatusLed(bool ok)
+{
+    // Only called from the httpd task; the off timer runs in the esp_timer task.
+    if(statusLedOffTimer == nullptr)
+    {
+        esp_timer_create_args_t args = {};
+        args.callback = statusLedOff;
+        args.name = "statusLedOff";
+        if(esp_timer_create(&args, &statusLedOffTimer) != ESP_OK)
+        {
+            statusLedOffTimer = nullptr;
+            return;
+        }
+    }
+    esp_timer_stop(statusLedOffTimer); // not running is fine
+    rgbLedWriteOrdered(STATUS_LED, WAVESHARE_LED_ORDER, ok ? 0 : 40, ok ? 40 : 0, 0);
+    esp_timer_start_once(statusLedOffTimer, 400 * 1000);
 }
 
 int WaveshareBoard::pinNetworkHardware(Preferences* preferences)

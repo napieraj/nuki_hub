@@ -141,6 +141,17 @@ namespace
         return ip == allowedSourceIp;
     }
 
+    // Visible feedback after authentication (never before, so an
+    // unauthenticated caller learns nothing from the LED).
+    void ledFeedback(bool ok)
+    {
+#ifdef NUKI_HUB_WAVESHARE_8DI8RO
+        WaveshareBoard::flashStatusLed(ok);
+#else
+        (void)ok;
+#endif
+    }
+
     esp_err_t reply(PsychicResponse* resp, int code, const char* result)
     {
         char buf[64];
@@ -475,12 +486,13 @@ esp_err_t ProtectWebhook::handle(PsychicRequest* request, PsychicResponse* resp)
                     r == LockActionResult::Success ? "queued" : "refused");
         switch(r)
         {
-        case LockActionResult::Success:       return reply(resp, 200, "ack");
-        case LockActionResult::AccessDenied:  return reply(resp, 403, "acl_denied");
-        default:                              return reply(resp, 500, "error");
+        case LockActionResult::Success:       ledFeedback(true);  return reply(resp, 200, "ack");
+        case LockActionResult::AccessDenied:  ledFeedback(false); return reply(resp, 403, "acl_denied");
+        default:                              ledFeedback(false); return reply(resp, 500, "error");
         }
     }
 
+    ledFeedback(false);
     return reply(resp, 403, "no_match");
 }
 
