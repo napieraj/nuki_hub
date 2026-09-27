@@ -3,28 +3,26 @@
 
 Standard library only. Three commands:
 
-  listen   Print every POST it receives. Point a Protect Alarm Manager webhook
-           at it once to capture a real payload and confirm the field names.
+  listen   Print every POST it receives. Point an Alarm Manager webhook at it
+           to capture a real fob press and confirm the fob's device value.
 
-  send     Send one Protect-shaped NFC event to the board.
+  send     Send one Protect-shaped event to the board.
 
-  suite    Run the full accept/reject sequence against the board and check
-           every response code. Run it with "Unlock" DISABLED in Nuki Hub's
-           "Nuki Lock Access Control": a fully valid event then ends in
+  suite    Run the accept/reject sequence against the board and check every
+           response. Run it with the rule's action DISABLED in Nuki Hub's
+           "Nuki Lock Access Control": the fully valid event then ends in
            403 acl_denied, which proves the whole path without moving the lock.
 
 The board only accepts requests from PROTECT_WEBHOOK_SOURCE_IP. For bench runs
 either run this on a host with that IP, or build a bench firmware with that
 IP set to your laptop (or "" to disable the check). Never ship the latter.
 
-Examples:
-  ./protect_webhook_test.py listen --port 8099
+Example (recommended token-per-alarm rules):
   ./protect_webhook_test.py suite --url http://192.0.2.20/protect \\
-      --secret "$SECRET" --key <captured-key> --device AA:BB:CC:DD:EE:01 \\
-      --field value --value <captured-button-id>
+      --secret "$SECRET" --token "$HOLD_RIGHT_TOKEN" --device AA:BB:CC:DD:EE:01
 
-Use the key/device/field/value from a real capture ("listen"); they must match
-a rule in ProtectWebhookConfig.h.
+If your rule also checks captured fields, pass them too:
+  --key <key> --key-checked --field <field> --value <v> [--field2 <f2> --value2 <v2>]
 """
 
 import argparse
@@ -38,23 +36,20 @@ import urllib.request
 import uuid
 
 
-def build_event(key, device, field, value, ts_ms=None, event_id=None, field2=None, value2=None):
-    """Mirror the Alarm Manager envelope around one trigger.
+def build_event(device, key="button", fields=None, ts_ms=None, event_id=None, legacy=False):
+    """Alarm Manager envelope around one trigger.
 
-    The envelope (alarm.triggers[].{key, device, eventId, timestamp}) is
-    documented; how a SuperLink button is identified inside the trigger is not,
-    so `field`/`value` come from a real capture.
+    legacy=True mimics older payloads: no per-trigger eventId/timestamp, only
+    the envelope timestamp (the board then derives an ID from ts|key|device).
     """
     now = int(time.time() * 1000) if ts_ms is None else ts_ms
-    trigger = {
-        "key": key,
-        "device": device,
-        "eventId": event_id or uuid.uuid4().hex[:24],
-        "timestamp": now,
-    }
-    trigger[field] = value
-    if field2:
-        trigger[field2] = value2
+    trigger = {"key": key, "device": device}
+    if not legacy:
+        trigger["eventId"] = event_id or uuid.uuid4().hex[:24]
+        trigger["timestamp"] = now
+    for f, v in (fields or {}).items():
+        if f:
+            trigger[f] = v
     return {
         "alarm": {
             "name": "Bench fob test",
@@ -62,15 +57,18 @@ def build_event(key, device, field, value, ts_ms=None, event_id=None, field2=Non
             "conditions": [{"condition": {"type": "is", "source": key}}],
             "triggers": [trigger],
         },
-        "timestamp": now + 25,
+        "timestamp": now,
     }
 
 
-def post(url, secret, body, timeout=5.0):
-    """POST raw bytes to url?k=secret. Returns (status, parsed-or-text body)."""
+def post(url, secret, body, token=None, timeout=5.0):
+    """POST raw bytes to url?k=secret[&r=token]. Returns (status, parsed-or-text)."""
     parts = urllib.parse.urlsplit(url)
-    query = urllib.parse.urlencode({"k": secret})
-    target = urllib.parse.urlunsplit((parts.scheme, parts.netloc, parts.path, query, ""))
+    q = {"k": secret}
+    if token is not None:
+        q["r"] = token
+    target = urllib.parse.urlunsplit((parts.scheme, parts.netloc, parts.path,
+                                      urllib.parse.urlencode(q), ""))
     data = body if isinstance(body, bytes) else json.dumps(body).encode()
     req = urllib.request.Request(target, data=data, method="POST",
                                  headers={"Content-Type": "application/json"})
@@ -109,55 +107,70 @@ def cmd_listen(args):
     http.server.HTTPServer(("0.0.0.0", args.port), Handler).serve_forever()
 
 
+def _fields(args, value=None, value2=None):
+    return {args.field: args.value if value is None else value,
+            args.field2: args.value2 if value2 is None else value2}
+
+
 def cmd_send(args):
-    status, body = post(args.url, args.secret,
-                        build_event(args.key, args.device, args.field, args.value,
-                                    field2=args.field2, value2=args.value2))
-    print(status, body)
+    body = build_event(args.device, args.key, _fields(args), legacy=args.legacy)
+    status, resp = post(args.url, args.secret, body, token=args.token)
+    print(status, resp)
     return 0 if status in (200, 403) else 1
 
 
 def cmd_suite(args):
-    url, secret = args.url, args.secret
-    k, d, f, v = args.key, args.device, args.field, args.value
-    f2, v2 = args.field2, args.value2
-    ev = lambda **kw: build_event(kw.pop("key", k), kw.pop("device", d), f, kw.pop("value", v),
-                                  field2=f2, value2=kw.pop("value2", v2), **kw)
+    url, secret, token, dev, key = args.url, args.secret, args.token, args.device, args.key
     now = lambda: int(time.time() * 1000)
-    valid_id = uuid.uuid4().hex[:24]
 
-    # (name, secret, body, expected status, expected result)
+    def ev(device=None, key_=None, value=None, value2=None, ts_ms=None, event_id=None, legacy=None):
+        return build_event(device or dev, key_ or key, _fields(args, value, value2),
+                           ts_ms=ts_ms, event_id=event_id,
+                           legacy=args.legacy if legacy is None else legacy)
+
+    # (name, secret, token, body, expected status, expected result)
     cases = [
-        ("wrong secret",      "x" * len(secret), ev(), 403, "denied"),
-        ("malformed JSON",    secret, b"{not json", 400, "bad_json"),
-        ("no triggers",       secret, {"alarm": {}}, 400, "no_triggers"),
-        ("oversized body",    secret, b"{" + b" " * 5000 + b"}", 413, "bad_size"),
-        ("other fob",         secret, ev(device="00:11:22:33:44:55"), 403, "no_match"),
-        ("other button",      secret, ev(value="not-a-configured-button"), 403, "no_match"),
-        ("other gesture",     secret, ev(value2="not-a-configured-gesture"), 403, "no_match"),
-        ("wrong trigger key", secret, ev(key="motion"), 403, "no_match"),
-        ("stale (-60 s)",     secret, ev(ts_ms=now() - 60_000), 403, "no_match"),
-        ("future (+60 s)",    secret, ev(ts_ms=now() + 60_000), 403, "no_match"),
-        # Everything valid. With the rule's action disabled in the ACL this is
-        # acl_denied; with it enabled it is ack and THE LOCK WILL MOVE.
-        ("valid press",       secret, ev(event_id=valid_id), 200 if args.live else 403,
-                                                             "ack" if args.live else "acl_denied"),
-        ("replay same press", secret, ev(event_id=valid_id), 429, "cooldown"),
-        ("new press < 10 s",  secret, ev(), 429, "cooldown"),
+        ("wrong secret",        "x" * len(secret), token, ev(), 403, "denied"),
+        ("malformed JSON",      secret, token, b"{not json", 400, "bad_json"),
+        ("no triggers",         secret, token, {"alarm": {}}, 400, "no_triggers"),
+        ("oversized body",      secret, token, b"{" + b" " * 5000 + b"}", 413, "bad_size"),
+        ("other fob",           secret, token, ev(device="00:11:22:33:44:55"), 403, "no_match"),
+        ("stale (-60 s)",       secret, token, ev(ts_ms=now() - 60_000), 403, "no_match"),
+        ("future (+60 s)",      secret, token, ev(ts_ms=now() + 60_000), 403, "no_match"),
+        ("legacy shape, stale", secret, token, ev(ts_ms=now() - 60_000, legacy=True), 403, "no_match"),
+    ]
+    if token is not None:
+        cases.append(("wrong alarm token",   secret, "0" * len(token), ev(), 403, "no_match"))
+        cases.append(("missing alarm token", secret, None, ev(), 403, "no_match"))
+    if args.key_checked:
+        cases.append(("wrong trigger key",   secret, token, ev(key_="motion"), 403, "no_match"))
+    if args.field and args.value is not None:
+        cases.append(("other button",        secret, token, ev(value="not-a-configured-button"), 403, "no_match"))
+    if args.field2 and args.value2 is not None:
+        cases.append(("other gesture",       secret, token, ev(value2="not-a-configured-gesture"), 403, "no_match"))
+
+    # Everything valid. With the rule's action disabled in the ACL this is
+    # acl_denied; with it enabled it is ack and THE LOCK WILL MOVE.
+    valid = ev(ts_ms=now(), event_id=uuid.uuid4().hex[:24])
+    cases += [
+        ("valid press",       secret, token, valid, 200 if args.live else 403,
+                                                    "ack" if args.live else "acl_denied"),
+        ("replay same press", secret, token, valid, 429, "cooldown"),
+        ("new press < 10 s",  secret, token, ev(), 429, "cooldown"),
     ]
 
     if args.live:
-        print("LIVE MODE: the 'valid event' case will actuate the lock.")
+        print("LIVE MODE: the 'valid press' case will actuate the lock.")
         if input("Type 'unlock' to continue: ").strip() != "unlock":
             return 1
 
     failures = 0
-    for name, sec, body, want_status, want_result in cases:
-        status, resp = post(url, sec, body)
+    for name, sec, tok, body, want_status, want_result in cases:
+        status, resp = post(url, sec, body, token=tok)
         result = resp.get("result") if isinstance(resp, dict) else resp
         ok = status == want_status and result == want_result
         failures += not ok
-        print(f"{'PASS' if ok else 'FAIL'}  {name:<18} -> {status} {result}"
+        print(f"{'PASS' if ok else 'FAIL'}  {name:<20} -> {status} {result}"
               + ("" if ok else f"   (expected {want_status} {want_result})"))
         time.sleep(0.2)
 
@@ -180,12 +193,17 @@ def main():
         s = sub.add_parser(name)
         s.add_argument("--url", required=True, help="http://<board>/protect")
         s.add_argument("--secret", required=True)
-        s.add_argument("--key", required=True, help="trigger key from the capture")
-        s.add_argument("--device", required=True, help="fob MAC/ID as Protect sends it")
-        s.add_argument("--field", default="value", help="trigger field naming the button")
-        s.add_argument("--value", required=True, help="button id from the capture")
-        s.add_argument("--field2", help="second field, e.g. the gesture (Press/Hold/Double)")
-        s.add_argument("--value2", help="expected content of --field2")
+        s.add_argument("--device", required=True, help="fob MAC as Protect sends it")
+        s.add_argument("--token", help="per-alarm rule token (?r=), if the rule uses one")
+        s.add_argument("--key", default="button", help="trigger key to send")
+        s.add_argument("--key-checked", action="store_true",
+                       help="the rule checks --key (adds a wrong-key case)")
+        s.add_argument("--field", help="button field, if the rule checks one")
+        s.add_argument("--value", help="expected button value")
+        s.add_argument("--field2", help="gesture field, if the rule checks one")
+        s.add_argument("--value2", help="expected gesture value")
+        s.add_argument("--legacy", action="store_true",
+                       help="send old-style triggers without eventId/timestamp")
         if name == "suite":
             s.add_argument("--live", action="store_true",
                            help="expect 200 ack for the valid case (lock moves)")

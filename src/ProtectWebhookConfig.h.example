@@ -3,10 +3,8 @@
 // -DNUKI_HUB_PROTECT_WEBHOOK. All values below are placeholders.
 //
 // Written for UniFi SuperLink KeyFobs (USL-FOB) via Alarm Manager
-// "Activity -> Button". Protect does not document what a button event looks
-// like in the webhook body, so CAPTURE ONE REAL PRESS FIRST
-// (scripts/protect_webhook_test.py listen) and copy key/device/field/value
-// from it. Until a rule matches, every event is rejected (403 no_match).
+// "Activity -> Button". Capture one real press first
+// (scripts/protect_webhook_test.py listen) to confirm the fob's device value.
 
 // Long random secret, passed as ?k=... in the Protect "Delivery URL".
 // Generate with: openssl rand -hex 32
@@ -15,23 +13,32 @@
 // Only accept requests from the Protect console (UniFi OS) IP. "" disables the check.
 #define PROTECT_WEBHOOK_SOURCE_IP "192.0.2.10"
 
-// The USL-FOB has 6 buttons (Top Left/Right, Bottom Left/Right, Left, Right)
-// x 3 gestures (Press, Hold, Double) = 18 distinct events. Expect Protect to
-// identify one by button AND gesture, possibly in two fields: each rule can
-// require up to two field/value pairs.
+// What is documented (Protect Integration API spec 7.2.105):
+//   - fob button presses are "sensorButtonPressed" events whose
+//     metadata.button.text is arm | disarm | night | panic | left | right
+//     (top-left, bottom-left, top-right, bottom-right, L, R). No gesture field.
+// What is NOT documented: how an Alarm Manager "Activity -> Button" trigger
+// encodes the button (and Press/Hold/Double) in the webhook body.
 //
-// One rule per button+gesture that may act on the lock.
-//   key      triggers[].key of the button event          (from the capture)
-//   device   triggers[].device, i.e. the fob's MAC/ID     (separators and case ignored)
-//   field    trigger field naming the button, e.g. "value" (from the capture)
-//   value    expected content of that field
-//   field2   second field, e.g. the gesture; nullptr if the first field says it all
-//   value2   expected content of field2; nullptr = no second condition
+// Recommended: let Protect filter. Create ONE Alarm Manager alarm per
+// button+gesture you use, each with its own Delivery URL token
+//     http://<board>/protect?k=<secret>&r=<token>
+// and match here on token + fob only. Nothing undocumented is parsed.
+//
+// Rule fields (nullptr = not checked):
+//   token    per-alarm URL token (?r=...), openssl rand -hex 16
+//   key      triggers[].key                     (only if you captured it)
+//   device   triggers[].device = the fob's MAC   (required; separators/case ignored)
+//   field    trigger field naming the button     (only if you captured it)
+//   value    expected content of field
+//   field2   second field, e.g. the gesture
+//   value2   expected content of field2
 //   action   Nuki Hub lock action: "unlock", "unlatch", "lock", "lockngo", ...
 //            still subject to Nuki Hub's "Nuki Lock Access Control" ACL
-// Never set value to nullptr unless any event from that fob may act.
+// A rule with neither token nor key+value matches ANY event from that fob.
 struct ProtectRule
 {
+    const char* token;
     const char* key;
     const char* device;
     const char* field;
@@ -42,12 +49,12 @@ struct ProtectRule
 };
 
 static const ProtectRule PROTECT_WEBHOOK_RULES[] = {
-    // Fob A: HOLD the Right side button -> unlock (hard to trigger in a pocket)
-    { "REPLACE_captured_key", "AA:BB:CC:DD:EE:01",
-      "REPLACE_button_field", "REPLACE_right", "REPLACE_gesture_field", "REPLACE_hold", "unlock" },
-    // Fob A: PRESS the Right side button -> lock
-    { "REPLACE_captured_key", "AA:BB:CC:DD:EE:01",
-      "REPLACE_button_field", "REPLACE_right", "REPLACE_gesture_field", "REPLACE_press", "lock" },
+    // Alarm "Fob A - Hold Right" -> unlock (a hold is hard to trigger in a pocket)
+    { "replace-with-32-hex-token-hold-right", nullptr, "AA:BB:CC:DD:EE:01",
+      nullptr, nullptr, nullptr, nullptr, "unlock" },
+    // Alarm "Fob A - Press Right" -> lock
+    { "replace-with-32-hex-token-press-right", nullptr, "AA:BB:CC:DD:EE:01",
+      nullptr, nullptr, nullptr, nullptr, "lock" },
 };
 
 // Reject events whose Protect timestamp is further than this from our (NTP) clock.

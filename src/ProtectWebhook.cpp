@@ -108,6 +108,17 @@ void ProtectWebhook::rememberEvent(const char* eventId)
     seenNext = (seenNext + 1) % kSeenEvents;
 }
 
+namespace
+{
+    bool ctEquals(const char* a, const char* b)
+    {
+        const size_t la = strlen(a), lb = strlen(b);
+        uint8_t diff = (uint8_t)(la != lb);
+        for(size_t i = 0; i < la && i < lb; i++) diff |= (uint8_t)a[i] ^ (uint8_t)b[i];
+        return diff == 0;
+    }
+}
+
 esp_err_t ProtectWebhook::handle(PsychicRequest* request, PsychicResponse* resp)
 {
     // 1. Transport checks: source IP, secret, size.
@@ -148,18 +159,37 @@ esp_err_t ProtectWebhook::handle(PsychicRequest* request, PsychicResponse* resp)
 
     const int64_t nowMs = (int64_t)time(nullptr) * 1000;
 
+    // Optional per-alarm token (?r=...): one Protect alarm per button+gesture,
+    // each with its own Delivery URL, lets Protect do the button filtering.
+    String ruleToken = request->hasParam("r") ? request->getParam("r")->value() : String();
+
+    // Older Alarm Manager payloads carry only key/device per trigger; fall back
+    // to the envelope timestamp.
+    const int64_t envelopeTs = doc["timestamp"] | (int64_t)0;
+
     // 3. Find one trigger that matches a rule (key + device + discriminator).
     for(JsonObjectConst t : triggers)
     {
         const char* key = t["key"] | "";
         const char* device = t["device"] | "";
+        int64_t ts = t["timestamp"] | (int64_t)0;
+        if(ts == 0) ts = envelopeTs;
+
+        // Without an eventId, the (timestamp, key, device) tuple identifies the event.
+        char synthId[48];
         const char* eventId = t["eventId"] | "";
-        const int64_t ts = t["timestamp"] | (int64_t)0;
+        if(eventId[0] == 0)
+        {
+            snprintf(synthId, sizeof(synthId), "%lld|%s|%s", (long long)ts, key, device);
+            eventId = synthId;
+        }
 
         const ProtectRule* rule = nullptr;
         for(const ProtectRule& r : PROTECT_WEBHOOK_RULES)
         {
-            if(strcmp(key, r.key) != 0 || !macMatches(device, r.device)) continue;
+            if(r.token != nullptr && !ctEquals(ruleToken.c_str(), r.token)) continue;
+            if(r.key != nullptr && strcmp(key, r.key) != 0) continue;
+            if(!macMatches(device, r.device)) continue;
             if(r.value != nullptr && !fieldEquals(t[r.field], r.value)) continue;
             if(r.value2 != nullptr && !fieldEquals(t[r.field2], r.value2)) continue;
             rule = &r;
@@ -175,8 +205,6 @@ esp_err_t ProtectWebhook::handle(PsychicRequest* request, PsychicResponse* resp)
             Log->printf("Protect webhook: stale event, skew %lld ms\n", (long long)(nowMs - ts));
             continue;
         }
-        if(eventId[0] == 0) continue;
-
         // 4. Replay + cooldown, then act.
         bool proceed = false;
         taskENTER_CRITICAL(&lock);
