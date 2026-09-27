@@ -15,6 +15,9 @@ from a UniFi Protect Alarm Manager webhook. No Wi-Fi, no MQTT broker needed.
   **green** = action queued, **red** = no rule matched (or stale) or refused by the
   ACL. Busy, cooldown and replays don't flash. If the colours are swapped, build
   with `-DWAVESHARE_LED_ORDER=LED_COLOR_ORDER_RGB`.
+- Time: every NTP sync is written to the PCF85063 RTC (I2C 0x51, UTC). After a
+  power cut the board restores the time from it if the RTC kept running, which
+  needs a rechargeable ML1220 (not CR1220) in the holder. Otherwise it waits for NTP.
 - The eight relays (TCA9554 @ 0x20, I2C SDA 42 / SCL 41) are forced off first thing in `setup()`.
 - GPIO 0 (BOOT), 38 (WS2812), 41/42 (I2C) and 46 (buzzer, strapping pin) can't be
   given a GPIO role. The eight digital inputs DI1-8 are GPIO 4-11 (dry contact to

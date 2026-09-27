@@ -4,6 +4,7 @@
 #include "PreferencesKeys.h"
 #include <Wire.h>
 #include <time.h>
+#include <sys/time.h>
 #include "esp_attr.h"
 #include "esp_system.h"
 #include "EspMillis.h"
@@ -68,6 +69,28 @@ namespace
             memset(&bleLog, 0, sizeof(bleLog));
             bleLog.magic = BLE_LOG_MAGIC;
         }
+    }
+
+    uint8_t toBcd(int v)
+    {
+        return (uint8_t)(((v / 10) << 4) | (v % 10));
+    }
+
+    int fromBcd(uint8_t v)
+    {
+        return (v >> 4) * 10 + (v & 0x0f);
+    }
+
+    // Days since 1970-01-01 for a proleptic Gregorian UTC date (H. Hinnant),
+    // so the RTC conversion doesn't depend on the TZ setting (mktime would).
+    int64_t daysFromCivil(int y, unsigned m, unsigned d)
+    {
+        y -= m <= 2;
+        const int era = (y >= 0 ? y : y - 399) / 400;
+        const unsigned yoe = (unsigned)(y - era * 400);
+        const unsigned doy = (153 * (m + (m > 2 ? -3 : 9)) + 2) / 5 + d - 1;
+        const unsigned doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+        return (int64_t)era * 146097 + (int64_t)doe - 719468;
     }
 
     esp_timer_handle_t statusLedOffTimer = nullptr;
@@ -205,6 +228,62 @@ void WaveshareBoard::flashStatusLed(bool ok)
     esp_timer_stop(statusLedOffTimer); // not running is fine
     rgbLedWriteOrdered(STATUS_LED, WAVESHARE_LED_ORDER, ok ? 0 : 40, ok ? 40 : 0, 0);
     esp_timer_start_once(statusLedOffTimer, 400 * 1000);
+}
+
+void WaveshareBoard::storeTimeInRtc()
+{
+    const time_t now = time(nullptr);
+    if(now < TIME_FLOOR)
+    {
+        return;
+    }
+    struct tm utc;
+    gmtime_r(&now, &utc);
+    Wire.begin(I2C_SDA, I2C_SCL, 100000);
+    Wire.beginTransmission(PCF85063_ADDR);
+    Wire.write(0x04);                        // Seconds; writing it clears the OS flag
+    Wire.write(toBcd(utc.tm_sec));
+    Wire.write(toBcd(utc.tm_min));
+    Wire.write(toBcd(utc.tm_hour));          // 24 h mode (Control_1 12_24 = 0, default)
+    Wire.write(toBcd(utc.tm_mday));
+    Wire.write((uint8_t)utc.tm_wday);
+    Wire.write(toBcd(utc.tm_mon + 1));
+    Wire.write(toBcd(utc.tm_year - 100));    // 2000-2099
+    Wire.endTransmission();
+    Wire.end();
+}
+
+bool WaveshareBoard::restoreTimeFromRtc()
+{
+    uint8_t r[7] = {};
+    Wire.begin(I2C_SDA, I2C_SCL, 100000);
+    Wire.beginTransmission(PCF85063_ADDR);
+    Wire.write(0x04);
+    bool ok = Wire.endTransmission(false) == 0 && Wire.requestFrom(PCF85063_ADDR, (uint8_t)7) == 7;
+    for(int i = 0; ok && i < 7; i++)
+    {
+        r[i] = Wire.read();
+    }
+    Wire.end();
+    // Bit 7 of Seconds (OS): the oscillator stopped, e.g. power loss without a
+    // charged backup cell, so the time is invalid.
+    if(!ok || (r[0] & 0x80))
+    {
+        return false;
+    }
+    const int sec = fromBcd(r[0] & 0x7f), min = fromBcd(r[1] & 0x7f), hour = fromBcd(r[2] & 0x3f);
+    const int day = fromBcd(r[3] & 0x3f), month = fromBcd(r[5] & 0x1f), year = 2000 + fromBcd(r[6]);
+    if(sec > 59 || min > 59 || hour > 23 || day < 1 || day > 31 || month < 1 || month > 12)
+    {
+        return false;
+    }
+    const int64_t epoch = daysFromCivil(year, month, day) * 86400 + hour * 3600 + min * 60 + sec;
+    if(epoch < TIME_FLOOR)
+    {
+        return false;
+    }
+    struct timeval tv = { (time_t)epoch, 0 };
+    return settimeofday(&tv, nullptr) == 0;
 }
 
 int WaveshareBoard::pinNetworkHardware(Preferences* preferences)

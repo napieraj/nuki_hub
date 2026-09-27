@@ -592,6 +592,7 @@ void cbSyncTime(struct timeval *tv)
     timeSynced = true;
 #ifdef NUKI_HUB_WAVESHARE_8DI8RO
     WaveshareBoard::markTimeSynced();
+    WaveshareBoard::storeTimeInRtc();
 #endif
 }
 
@@ -1566,6 +1567,12 @@ void setup()
     {
         timeSynced = true;
         Log->println("Time was synced before this reset, keeping it");
+    }
+    else if(WaveshareBoard::restoreTimeFromRtc())
+    {
+        timeSynced = true;
+        WaveshareBoard::markTimeSynced();
+        Log->println("Time restored from the PCF85063 RTC");
     }
 #endif
     initializeRestartReason();

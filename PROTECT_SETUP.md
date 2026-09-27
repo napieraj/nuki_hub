@@ -82,8 +82,10 @@ One alarm per rule (e.g. "Fob A - Hold Right", "Fob A - Press Right"):
   Nuki Hub (default `pool.ntp.org`). Allow UDP 123 from the board to that server.
   On an isolated VLAN with neither, **every** press gets `503 no_time`.
   After a software reset (web UI reboot, watchdog, BLE restart) the clock and the
-  "synced" state are kept, so presses work right away; after a power cut the board
-  waits for NTP again.
+  "synced" state are kept, so presses work right away. Every NTP sync also stores
+  the time in the board's PCF85063 RTC; with a charged **ML1220** cell in the RTC
+  holder, the board restores it after a power cut too. Without the cell it waits
+  for NTP again.
 - Protect retries on 5xx/408 only (1 s, then 2 s). A retry of an accepted press
   gets `429 cooldown`, so it never runs twice. If the board is offline, the press is lost (Protect has no queue).
 - `200 ack` means *queued*, not *done*. If the lock can't be reached (out of BLE

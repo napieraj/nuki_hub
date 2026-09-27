@@ -11,7 +11,8 @@
 //    and the W5500 gets a full hardware reset pulse (its RSTn is on GPIO39).
 //  - BLE TX power defaults to +9 dBm when unset (upstream would silently use +3).
 //  - The WS2812 flashes green/red after each authenticated webhook call.
-//  - "Time synced" survives software resets (the webhook needs a valid clock).
+//  - "Time synced" survives software resets (the webhook needs a valid clock),
+//    and power loss if the PCF85063 RTC has a backup cell.
 //  - BLE errors and beacon losses (each reboots the board) are logged in
 //    RTC memory and listed on the info page.
 //  - No online updates: update checks, MQTT updates and URL-based OTA are forced
@@ -47,6 +48,7 @@ namespace WaveshareBoard
     constexpr int I2C_SDA = 42;
     constexpr int I2C_SCL = 41;
     constexpr uint8_t TCA9554_ADDR = 0x20;
+    constexpr uint8_t PCF85063_ADDR = 0x51;
 
     // WS2812 status LED
     constexpr int STATUS_LED = 38;
@@ -70,6 +72,13 @@ namespace WaveshareBoard
     // a software/watchdog/panic reset, with the flag set and time() plausible.
     void markTimeSynced();
     bool timeSurvivedReset();
+
+    // On-board PCF85063 RTC (UTC; backup cell ML1220 in the holder):
+    // storeTimeInRtc() after every NTP sync; restoreTimeFromRtc() at boot when
+    // the time isn't known yet, returns true if it set the system clock (RTC
+    // oscillator ran without interruption and the date is plausible).
+    void storeTimeInRtc();
+    bool restoreTimeFromRtc();
 
     // BLE fault log (M6, measurement only): every BLE disconnect error and
     // beacon-watchdog trigger that makes processLock() reboot the board is
