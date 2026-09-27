@@ -24,7 +24,7 @@ from a UniFi Protect Alarm Manager webhook. No Wi-Fi, no MQTT broker needed.
   every 12 h); after a power cut `PCF85063 RTC time: <date> UTC` and `Time restored
   from the PCF85063 RTC`, or a line saying why not (e.g. `lost its time`).
 - **Relay rules:** a webhook rule with action `relay1`..`relay8` closes that relay
-  for `PROTECT_WEBHOOK_RELAY_PULSE_MS` (default 3 s), e.g. wired across an
+  for the relay pulse time (web page, default 3 s), e.g. wired across an
   intercom's door-open button: relay **COM + NO** in parallel with the button's
   two contacts. That only works if the button is a plain dry contact; 2-wire bus
   intercoms need their own interface. Relay rules skip the lock checks (BLE,
@@ -32,7 +32,8 @@ from a UniFi Protect Alarm Manager webhook. No Wi-Fi, no MQTT broker needed.
   The log shows `Protect webhook: relay1 -> pulsed`. Before wiring a door, test
   that no relay clicks during a few PoE power cycles and reflashes (the power-up
   state of the TCA9554 driver is not yet proven, see `FINDINGS.md`).
-  The pulse must be 100..30000 ms (build check). If opening the relay fails, the
+  The pulse must be 100..30000 ms. "Relays available to rules" (1-8, web page)
+  limits which `relayN` a rule may use; higher ones are refused when saving. If opening the relay fails, the
   board retries every 100 ms until it succeeds (`relayN: opening failed` in the log).
   The TCA9554 has no reset line: if the ESP resets mid-pulse (crash, watchdog,
   BLE reboot), the relay stays closed until the next boot clears it (boot time,
@@ -70,8 +71,18 @@ from a UniFi Protect Alarm Manager webhook. No Wi-Fi, no MQTT broker needed.
   power-on and the last 10 events. Use it to decide whether rate-limiting the
   reboots is worth it. The beacon timeout is "Restart if bluetooth beacons not received" in
   the Nuki configuration (default 60 s).
-- `NUKI_HUB_PROTECT_WEBHOOK` is on: configure `src/ProtectWebhookConfig.h`. KeyFob + Protect setup and bench test: see `PROTECT_SETUP.md`
-  (copy the `.example`).
+- `NUKI_HUB_PROTECT_WEBHOOK` is on: configure it in the web UI under **Protect
+  Webhook & Relays** (stored in NVS namespace `forkcfg`, applied without a
+  reboot, not part of Nuki Hub's export/import, erased by its factory reset).
+  `src/ProtectWebhookConfig.h` is optional and only seeds an empty board.
+  KeyFob + Protect setup, hardening options and bench test: see `PROTECT_SETUP.md`.
+- The USB-C serial console always runs on this build (upstream only starts it
+  with the access point open): `forkcfg unlock` switches off the fork page's
+  settings lock and TOTP requirement, `forkcfg off` switches the webhook off.
+  Upstream's serial config import is therefore available too; USB access already
+  means full control (it can reflash the board).
+- Settings lock option: a DI input (without a GPIO role) that must be active
+  (closed to DGND) to save the fork settings page.
 
 ### First boot
 1. Flash over USB-C. The board comes up on Ethernet (DHCP by default).
