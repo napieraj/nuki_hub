@@ -52,6 +52,10 @@ namespace WaveshareBoard
     constexpr uint8_t PCF85063_ADDR = 0x51;
     constexpr int RELAY_COUNT = 8;
 
+    // Digital inputs DI1-DI8 = GPIO 4-11 (active low).
+    constexpr int DIGITAL_INPUT_COUNT = 8;
+    constexpr int digitalInputGpio(int di) { return 3 + di; }
+
     // WS2812 status LED
     constexpr int STATUS_LED = 38;
 

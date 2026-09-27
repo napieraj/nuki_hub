@@ -13,6 +13,7 @@
 #include "Config.h"
 #include "WaveshareBoard.h"
 #include "ProtectWebhook.h"
+#include "ForkSettings.h"
 #include "esp32-hal-log.h"
 #include "esp32-hal-bt-mem.h"
 #include "hal/wdt_hal.h"
@@ -1583,6 +1584,9 @@ void setup()
         WaveshareBoard::markTimeSynced();
         Log->println("Time restored from the PCF85063 RTC");
     }
+#endif
+#ifdef NUKI_HUB_PROTECT_WEBHOOK
+    ForkSettings::begin();
 #endif
     initializeRestartReason();
 
