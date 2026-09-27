@@ -2,7 +2,7 @@
 
 **Repo** https://github.com/napieraj/nuki_hub (fork of technyon/nuki_hub, upstream
 `master` @ `e0aa97a`, v9.18; nothing newer upstream at the time of writing).
-**Branch** `waveshare-8di8ro`, head `c94cf37`. Push only here, never to technyon.
+**Branch** `waveshare-8di8ro`. Last hardware-flashed code: `c94cf37`. Push only here, never to technyon.
 The previous task list (H1–L16, O1–O3) is done; it's in git history
 (`git show 6c92b93:HANDOFF.md`).
 
@@ -23,7 +23,7 @@ The board checks it and queues a Nuki action or pulses a relay. No MQTT, no Hybr
 ```
 source ~/.venvs/pio/bin/activate            # PlatformIO Core 6.1.19
 git pull && pio run -e esp32-s3-waveshare-8di8ro -t upload -t monitor
-pio test -e native                          # 15 host tests, webhook logic
+pio test -e native                          # 22 host tests, webhook + RTC logic
 ```
 - The build ends in `SUCCESS`; images land in `release/esp32s3oct/`. It builds no
   updater, so **firmware updates are USB-only** (the web upload page only takes
@@ -65,6 +65,22 @@ pio test -e native                          # 15 host tests, webhook logic
    `ble_stalled` never firing during normal use, RTC restore after a PoE power cut
    with an ML1220 fitted, info page BLE event log.
 
+## Since the last flash (2026-09-27, review pass, build + host tests green, untested on hardware)
+- **Relays** (`4d3ea74`, `659da37`, `48fc15b`): the TCA9554 init writes the outputs off, reads them back, and
+  only then makes the pins outputs. If that fails, the pins stay inputs, requests get a 500, and every relay
+  write retries the init. The off timer re-arms every 100 ms until the relay opens, and never blocks the
+  esp_timer task. The build refuses a pulse length outside 100–30000 ms. A reset mid-pulse leaves the relay
+  closed until the next boot's init (the chip has no reset line). **Bench test before wiring the intercom:**
+  WAVESHARE.md / PROTECT_SETUP.md; power-cycle and reflash with a continuity meter across COM–NO, then pulse,
+  cooldown `429`, reset mid-pulse.
+- **Unlatch is not re-sent after an ambiguous result** (`8647d98`): Unlatch, LockNgoUnlatch and FobAction1–3
+  are retried only on `NotPaired`. TimeOut, Failed and Lock_Busy can each come after the lock got the command.
+  The log shows `Unlatch: result ambiguous, not retrying`. The cost: on a weak link an unlatch can fail, and
+  the user presses again.
+- **Time** (`d1661ca`, `8e080ba`): an empty NTP server field falls back to pool.ntp.org. The PCF85063 restore
+  now rejects bad BCD, impossible dates, STOP and 12 h mode (`src/WaveshareRtcLogic.h`, tested), and logs
+  reads and writes. Expected log lines: WAVESHARE.md.
+
 ## Decisions pending with the user
 - **Updater:** stay USB-only, or build/ship an updater so the web UI can update.
 - **M6 (BLE reboots):** currently measure-only (every BLE error/beacon loss still
@@ -101,9 +117,10 @@ pio test -e native                          # 15 host tests, webhook logic
 - The ACL (Nuki Lock Access Control) gates webhook lock actions, not GPIO inputs
   and not relay rules.
 
-## Upstream issue to file (NukiBleEsp32)
-Lock actions are reported Success when the lock *accepts* the command, not when it
-completes (`CommandStatus::Complete == Command::Empty == 0`, `NukiBle.hpp` ~413). A
-drop in between reads as a timeout and is retried, so the action can run twice.
-Harmless for lock/unlock, not for unlatch. Suggest separating accepted and completed
-states, or exposing both.
+## Upstream issue to file (I-Connect/NukiBleEsp32; iranl's fork has issues disabled)
+Ready-to-file draft: `docs/upstream-issue-nukible-accepted-vs-complete.md`. At `NukiBle.hpp:413`,
+`(CommandStatus)lastMsgCodeReceived == Complete` matches `Command::Empty` (both 0). So lockAction returns
+Success about 10 ms after ACCEPTED, and errors after acceptance (motor blocked, canceled) read as Success.
+Correction to the earlier note: the double unlatch doesn't come from this. It comes from a TimeOut while
+waiting for ACCEPTED (hpp:357-364), when the lock may already have run the command. The fork handles that
+itself now (see above). Related downstream report: technyon/nuki_hub#278.
