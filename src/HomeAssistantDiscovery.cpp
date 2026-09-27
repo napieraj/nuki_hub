@@ -186,7 +186,7 @@ void HomeAssistantDiscovery::publishHASSNukiHubConfig()
 
     _device->mqttPublish(path.c_str(), MQTT_QOS_LEVEL, true, _buffer);
 
-#ifndef CONFIG_IDF_TARGET_ESP32H2
+#if !defined(CONFIG_IDF_TARGET_ESP32H2) && !defined(NUKI_HUB_NO_WIFI)
     publishHassTopic("sensor",
                      "wifi_signal_strength",
                      _nukiHubUidString,
