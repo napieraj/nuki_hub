@@ -26,36 +26,82 @@ namespace
         return Wire.endTransmission() == 0;
     }
 
-    // Relays: shadow of the TCA9554 output register. relayLock serializes the
-    // read-modify-write plus its I2C write (httpd task and esp_timer task).
-    uint8_t relayOutputs = 0;
-    SemaphoreHandle_t relayLock = nullptr;
-    esp_timer_handle_t relayOffTimers[WaveshareBoard::RELAY_COUNT] = {};
-
-    bool setRelay(int relay, bool on)
+    bool tcaRead(uint8_t reg, uint8_t& value)
     {
-        if(relayLock == nullptr || xSemaphoreTake(relayLock, pdMS_TO_TICKS(500)) != pdTRUE)
+        Wire.beginTransmission(WaveshareBoard::TCA9554_ADDR);
+        Wire.write(reg);
+        if(Wire.endTransmission(false) != 0 || Wire.requestFrom(WaveshareBoard::TCA9554_ADDR, (uint8_t)1) != 1)
         {
             return false;
         }
-        const uint8_t bit = (uint8_t)(1u << (relay - 1));
-        const uint8_t out = on ? (relayOutputs | bit) : (relayOutputs & ~bit);
-        const bool ok = tcaWrite(0x01, out);
+        value = Wire.read();
+        return true;
+    }
+
+    // Relays: shadow of the TCA9554 output register. relayLock serializes the
+    // read-modify-write plus its I2C write (httpd task and esp_timer task).
+    uint8_t relayOutputs = 0;
+    bool relaysReady = false; // output register read back 0, pins are outputs
+    SemaphoreHandle_t relayLock = nullptr;
+    esp_timer_handle_t relayOffTimers[WaveshareBoard::RELAY_COUNT] = {};
+    uint32_t relayOffFailures[WaveshareBoard::RELAY_COUNT] = {};
+    constexpr uint64_t RELAY_OFF_RETRY_US = 100 * 1000;
+
+    // Output register (0x01) to 0, read back, and only then all pins to
+    // outputs (0x03). The TCA9554 powers up with the output register at 0xFF
+    // and all pins as inputs, and it has no reset line: enabling the outputs
+    // while the output register still holds 0xFF (e.g. its write failed)
+    // would close all eight relays. Never swap or skip a step.
+    // After a warm reset (panic, watchdog, reboot) the pins are still outputs
+    // with the last state, so a relay closed mid-pulse stays closed until here.
+    bool initRelays()
+    {
+        uint8_t out = 0xff, cfg = 0xff;
+        if(!tcaWrite(0x01, 0x00) || !tcaRead(0x01, out) || out != 0x00)
+        {
+            return false;
+        }
+        relayOutputs = 0;
+        return tcaWrite(0x03, 0x00) && tcaRead(0x03, cfg) && cfg == 0x00;
+    }
+
+    bool setRelay(int relay, bool on, TickType_t wait)
+    {
+        if(relayLock == nullptr || xSemaphoreTake(relayLock, wait) != pdTRUE)
+        {
+            return false;
+        }
+        bool ok = relaysReady;
         if(ok)
         {
-            relayOutputs = out;
+            const uint8_t bit = (uint8_t)(1u << (relay - 1));
+            const uint8_t out = on ? (relayOutputs | bit) : (relayOutputs & ~bit);
+            ok = tcaWrite(0x01, out);
+            if(ok)
+            {
+                relayOutputs = out;
+            }
         }
         xSemaphoreGive(relayLock);
         return ok;
     }
 
+    // esp_timer callback. It must not block (the esp_timer task also runs
+    // NimBLE's timers), so a failed write re-arms the timer instead of waiting:
+    // a relay left closed would keep the door open, so retry until it opens.
     void relayOff(void* arg)
     {
-        // Retry: a relay left closed would keep the door open.
-        for(int i = 0; i < 3 && !setRelay((int)(intptr_t)arg, false); i++)
+        const int relay = (int)(intptr_t)arg;
+        if(setRelay(relay, false, pdMS_TO_TICKS(20)))
         {
-            vTaskDelay(pdMS_TO_TICKS(20));
+            relayOffFailures[relay - 1] = 0;
+            return;
         }
+        if(relayOffFailures[relay - 1]++ % 50 == 0)
+        {
+            log_e("relay%d: opening failed, retrying", relay);
+        }
+        esp_timer_start_once(relayOffTimers[relay - 1], RELAY_OFF_RETRY_US);
     }
 
     constexpr uint32_t TIME_SYNCED_MAGIC = 0x54494d45; // "TIME"
@@ -145,14 +191,15 @@ namespace
 
 void WaveshareBoard::earlyInit()
 {
-    // Relays: output register (0x01) low first, then all pins to outputs (0x03).
-    // The TCA9554 powers up with outputs latched high and pins as inputs, and it
-    // has no reset line, so this order matters. Never swap it.
+    // Relays off first (register order: see initRelays). If that fails, the
+    // pins stay inputs and pulseRelay retries the init.
     // The bus stays up: relays and the RTC use it later, from several tasks
     // (Wire locks each transaction).
     Wire.begin(I2C_SDA, I2C_SCL, 100000);
-    tcaWrite(0x01, 0x00);
-    tcaWrite(0x03, 0x00);
+    for(int i = 0; i < 3 && !(relaysReady = initRelays()); i++)
+    {
+        delay(5);
+    }
     relayLock = xSemaphoreCreateMutex();
 
     initBleLog();
@@ -264,13 +311,23 @@ bool WaveshareBoard::pulseRelay(int relay, uint32_t pulseMs)
             return false;
         }
     }
-    esp_timer_stop(timer); // not running is fine
-    if(!setRelay(relay, true))
+    if(!relaysReady && relayLock != nullptr && xSemaphoreTake(relayLock, pdMS_TO_TICKS(500)) == pdTRUE)
     {
+        relaysReady = initRelays();
+        xSemaphoreGive(relayLock);
+    }
+    esp_timer_stop(timer); // not running is fine
+    const bool closed = setRelay(relay, true, pdMS_TO_TICKS(500));
+    // Arm the off timer even if the write reported an error: the TCA9554 may
+    // have latched it anyway. INVALID_STATE: relayOff re-armed it meanwhile
+    // (retrying), and that opens the relay too.
+    const esp_err_t err = esp_timer_start_once(timer, (uint64_t)pulseMs * 1000);
+    if(err != ESP_OK && err != ESP_ERR_INVALID_STATE)
+    {
+        relayOff((void*)(intptr_t)relay);
         return false;
     }
-    esp_timer_start_once(timer, (uint64_t)pulseMs * 1000);
-    return true;
+    return closed;
 }
 
 void WaveshareBoard::flashStatusLed(bool ok)
