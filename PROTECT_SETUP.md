@@ -122,3 +122,4 @@ would have to hold a Protect API key. The webhook keeps credentials off the lock
 | 413 | `bad_size` | Empty or > 4 KB body |
 | 429 | `cooldown` | Replayed event, or < 10 s since the last accepted event |
 | 503 | `no_time` | Clock not synced yet (Protect retries twice) |
+| 503 | `busy` | Another lock action is still queued or being sent (Protect retries twice) |

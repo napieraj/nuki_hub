@@ -45,6 +45,8 @@ public:
     // espMillis() timestamp: if the action hasn't been sent to the lock by then
     // (first attempt or any retry), it's dropped. 0 = no deadline.
     LockActionResult requestLockAction(const char* action, int64_t deadlineTs);
+    // An action is queued or still being sent (including retries).
+    bool isLockActionPending() const;
 #endif
     const bool hasKeypad() const;
     bool hasDoorSensor() const;

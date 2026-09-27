@@ -1242,6 +1242,11 @@ LockActionResult NukiWrapper::requestLockAction(const char *action, int64_t dead
     return result;
 }
 
+bool NukiWrapper::isLockActionPending() const
+{
+    return _nextLockAction != (NukiLock::LockAction)0xff;
+}
+
 bool NukiWrapper::lockActionExpired(const int64_t& ts)
 {
     taskENTER_CRITICAL(&_nextLockActionDeadlineMux);

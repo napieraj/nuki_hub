@@ -226,7 +226,17 @@ esp_err_t ProtectWebhook::handle(PsychicRequest* request, PsychicResponse* resp)
             Log->printf("Protect webhook: stale event, skew %lld ms\n", (long long)(nowMs - ts));
             continue;
         }
-        // 4. Replay + cooldown, then act.
+        // 4. One action at a time. The queue is a single slot, so a second
+        // action would silently replace the first. Refuse before touching the
+        // replay cache and cooldown, so Protect's retry (1 s, 2 s) can still
+        // succeed once the lock task is done or the pending action expired.
+        if(_nuki->isLockActionPending())
+        {
+            Log->println("Protect webhook: lock action pending, busy");
+            return reply(resp, 503, "busy");
+        }
+
+        // 5. Replay + cooldown, then act.
         bool proceed = false;
         taskENTER_CRITICAL(&lock);
         const int64_t m = espMillis();
