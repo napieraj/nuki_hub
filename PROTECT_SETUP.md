@@ -33,8 +33,8 @@ From the UniFi Protect 7.2.105 source (not yet confirmed by a live capture):
 
 Suggested mapping: **Hold Right = unlock**, **Press Right = lock**. A 3 s hold
 is hard to trigger by accident in a pocket, and the face buttons stay free for
-the alarm. `unlatch` works too (knob-only lock); it is never sent twice, so on
-a bad BLE link it may fail without a retry (see section 4).
+the alarm. `unlatch` works too (knob-only lock). `lock` and `unlatch` are never
+sent twice, so on a bad BLE link they may fail without a retry (see section 4).
 
 ### 1. Confirm the payload once (5 minutes)
 1. On a laptop: `scripts/protect_webhook_test.py listen --port 8099`
@@ -92,12 +92,18 @@ One alarm per rule (e.g. "Fob A - Hold Right", "Fob A - Press Right"):
   range, busy), a queued action that hasn't been sent within 8 s
   (`PROTECT_WEBHOOK_ACTION_DEADLINE_MS`) is dropped and the log shows
   `Lock action expired`, so the door never opens long after the press.
-- A failed lock action is retried (Nuki Hub's retry setting), except an
-  unlatching one (`unlatch`, `lockNgoUnlatch`, fob actions): a timeout may mean
-  the lock got the command but its reply was lost, so a retry could open the door
-  twice. It is retried only if it provably never reached the lock (not paired);
-  otherwise the log shows `Unlatch: result ambiguous, not retrying` and MQTT
-  `lock/retry` reads `ambiguous`. Check the lock state and press again if needed.
+- A failed lock action is retried (Nuki Hub's retry setting), except the
+  send-once ones: unlatching (`unlatch`, `lockNgoUnlatch`, fob actions) and
+  locking (`lock`, `lockNgo`, `fullLock`). A timeout may mean the lock got the
+  command but its reply was lost, so a retry could open the door twice, or hit
+  the bolt while it is still moving (a "motor jam" notification). These are
+  retried only if they provably never reached the lock (not paired); otherwise
+  the log shows `Lock action result: timeOut`, then e.g.
+  `Lock: result ambiguous (TIMEOUT), not retrying` (or `Unlatch: ...`, with
+  `FAILED` / `LOCK_BUSY` / `ERROR`), and MQTT `lock/retry` reads `ambiguous`.
+  Check the lock state and press again if needed. `unlock` is still retried: a
+  second unlock of an unlocked lock doesn't move the motor. This applies to every
+  source (webhook, GPIO inputs, MQTT).
 
 ### Host tests
 `pio test -e native` runs the rule matching, timestamp, replay and per-rule

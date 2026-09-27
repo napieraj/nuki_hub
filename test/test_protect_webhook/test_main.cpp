@@ -256,13 +256,41 @@ void test_unlatch_not_retried_after_ambiguous_result()
         TEST_ASSERT_FALSE(lockActionRetryable(a, ERROR));
         TEST_ASSERT_TRUE(lockActionRetryable(a, NOT_PAIRED));
     }
-    const uint8_t others[] = {UNLOCK, LOCK, LOCKNGO, FULL_LOCK};
-    for(uint8_t a : others)
+    // Unlock is still retried after any failure.
+    TEST_ASSERT_TRUE(lockActionRetryable(UNLOCK, TIMEOUT));
+    TEST_ASSERT_TRUE(lockActionRetryable(UNLOCK, FAILED));
+    TEST_ASSERT_TRUE(lockActionRetryable(UNLOCK, LOCK_BUSY));
+    TEST_ASSERT_TRUE(lockActionRetryable(UNLOCK, ERROR));
+    TEST_ASSERT_TRUE(lockActionRetryable(UNLOCK, NOT_PAIRED));
+}
+
+void test_lock_not_retried_after_ambiguous_result()
+{
+    // NukiLock::LockAction and Nuki::CmdResult values.
+    const uint8_t UNLOCK = 0x01, LOCK = 0x02, UNLATCH = 0x03, LOCKNGO = 0x04,
+                  LOCKNGO_UNLATCH = 0x05, FULL_LOCK = 0x06, FOB_NO_ACTION = 0x50, FOB2 = 0x82;
+    const uint8_t FAILED = 2, TIMEOUT = 3, NOT_PAIRED = 5, LOCK_BUSY = 6, ERROR = 99;
+
+    const uint8_t sendOnce[] = {LOCK, UNLATCH, LOCKNGO, LOCKNGO_UNLATCH, FULL_LOCK, FOB2};
+    for(uint8_t a : sendOnce)
     {
-        TEST_ASSERT_TRUE(lockActionRetryable(a, TIMEOUT));
-        TEST_ASSERT_TRUE(lockActionRetryable(a, FAILED));
-        TEST_ASSERT_TRUE(lockActionRetryable(a, LOCK_BUSY));
+        TEST_ASSERT_TRUE(lockActionSentOnce(a));
+        TEST_ASSERT_FALSE(lockActionRetryable(a, TIMEOUT));
+        TEST_ASSERT_FALSE(lockActionRetryable(a, FAILED));
+        TEST_ASSERT_FALSE(lockActionRetryable(a, LOCK_BUSY));
+        TEST_ASSERT_FALSE(lockActionRetryable(a, ERROR));
+        TEST_ASSERT_TRUE(lockActionRetryable(a, NOT_PAIRED));
     }
+    TEST_ASSERT_FALSE(lockActionSentOnce(UNLOCK));
+    TEST_ASSERT_FALSE(lockActionSentOnce(FOB_NO_ACTION));
+    TEST_ASSERT_TRUE(lockActionRetryable(UNLOCK, TIMEOUT));
+
+    TEST_ASSERT_EQUAL_STRING("TIMEOUT", cmdResultLogName(TIMEOUT));
+    TEST_ASSERT_EQUAL_STRING("FAILED", cmdResultLogName(FAILED));
+    TEST_ASSERT_EQUAL_STRING("LOCK_BUSY", cmdResultLogName(LOCK_BUSY));
+    TEST_ASSERT_EQUAL_STRING("NOT_PAIRED", cmdResultLogName(NOT_PAIRED));
+    TEST_ASSERT_EQUAL_STRING("ERROR", cmdResultLogName(ERROR));
+    TEST_ASSERT_EQUAL_STRING("UNKNOWN", cmdResultLogName(42));
 }
 
 int main()
@@ -284,5 +312,6 @@ int main()
     RUN_TEST(test_relay_actions);
     RUN_TEST(test_rule_index_out_of_range);
     RUN_TEST(test_unlatch_not_retried_after_ambiguous_result);
+    RUN_TEST(test_lock_not_retried_after_ambiguous_result);
     return UNITY_END();
 }

@@ -15,7 +15,9 @@
 #include "ProtectWebhookLogic.h"
 static_assert(Nuki::CmdResult::NotPaired == ProtectWebhookLogic::CMD_RESULT_NOT_PAIRED, "CmdResult values changed");
 static_assert((uint8_t)NukiLock::LockAction::Unlatch == 0x03 && (uint8_t)NukiLock::LockAction::LockNgoUnlatch == 0x05 &&
-              (uint8_t)NukiLock::LockAction::FobAction1 == 0x81 && (uint8_t)NukiLock::LockAction::FobAction3 == 0x83,
+              (uint8_t)NukiLock::LockAction::FobAction1 == 0x81 && (uint8_t)NukiLock::LockAction::FobAction3 == 0x83 &&
+              (uint8_t)NukiLock::LockAction::Lock == 0x02 && (uint8_t)NukiLock::LockAction::LockNgo == 0x04 &&
+              (uint8_t)NukiLock::LockAction::FullLock == 0x06,
               "LockAction values changed");
 #endif
 
@@ -312,9 +314,9 @@ void NukiWrapper::checkLockAction(const int64_t& ts)
         int retryCount = 0;
 #ifdef NUKI_HUB_PROTECT_WEBHOOK
         bool expired = false;
-        // Set when an unlatching action failed in a way that doesn't prove the
-        // lock never got it (e.g. TimeOut after the command was written): it may
-        // have unlatched, so it is not sent again.
+        // Set when a send-once action (unlatching or locking) failed in a way
+        // that doesn't prove the lock never got it (e.g. TimeOut after the
+        // command was written): it may have run, so it is not sent again.
         bool ambiguous = false;
         Nuki::CmdResult ambiguousResult = Nuki::CmdResult::Error;
 #endif
@@ -346,7 +348,10 @@ void NukiWrapper::checkLockAction(const int64_t& ts)
              if(cmdResult != Nuki::CmdResult::Success &&
                 !ProtectWebhookLogic::lockActionRetryable((uint8_t)_nextLockAction, (uint8_t)cmdResult))
              {
-                 Log->println("Unlatch: result ambiguous, not retrying");
+                 char actionStr[20] = {0};
+                 NukiLock::lockactionToString(_nextLockAction, actionStr);
+                 Log->printf("%s: result ambiguous (%s), not retrying\n", actionStr,
+                             ProtectWebhookLogic::cmdResultLogName((uint8_t)cmdResult));
                  ambiguous = true;
                  ambiguousResult = cmdResult;
              }
@@ -384,7 +389,7 @@ void NukiWrapper::checkLockAction(const int64_t& ts)
 #ifdef NUKI_HUB_PROTECT_WEBHOOK
         else if(ambiguous)
         {
-            Log->println("Lock: unlatch may have run, not retried");
+            Log->println("Lock: action may have run, not retried");
             _network->publishRetry("ambiguous");
             retryCount = 0;
             _nextLockAction = (NukiLock::LockAction) 0xff;

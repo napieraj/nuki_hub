@@ -53,6 +53,7 @@ Edit `src/ProtectWebhookConfig.h`:
   ```
   Hold (3 s) to unlock is hard to trigger by accident in a pocket. `unlatch` also
   works; it is never retried after a timeout, so it can't open the door twice.
+  `lock` isn't either, so a retry can't hit the bolt while it's still moving.
 
 The build refuses the file if the secret or a token is still a placeholder or too
 short, or a rule is incomplete; the error message says which.

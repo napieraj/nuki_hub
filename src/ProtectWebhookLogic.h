@@ -96,15 +96,44 @@ namespace ProtectWebhookLogic
 
     // Nuki::CmdResult::NotPaired (NukiDataTypes.h). The only lockAction result
     // returned before anything is written to the lock (NukiBle.hpp executeAction).
-    // TimeOut, Failed and Lock_Busy can each come after the command was sent.
+    // TimeOut, Failed and Lock_Busy can each come after the command was sent
+    // (a TimeOut waiting for the challenge, before the command, looks the same
+    // to the caller, so every TimeOut counts as ambiguous).
     constexpr uint8_t CMD_RESULT_NOT_PAIRED = 5;
 
-    // May a failed lock action be sent again? Unlatching actions only when the
-    // result proves the command never reached the lock: a second unlatch opens
-    // the door a second time.
+    // Actions that must not be sent twice: the unlatching ones (a second unlatch
+    // opens the door again) and the ones that drive the bolt towards locked
+    // (Lock, LockNgo, FullLock): a re-send while the motor is still running from
+    // the first command is the likely cause of "motor jam" notifications.
+    // Unlock is not in the list: once unlocked, the lock answers a second unlock
+    // with Complete and doesn't move (NukiBle.hpp, cmdChallAccStateMachine).
+    inline bool lockActionSentOnce(uint8_t action)
+    {
+        return lockActionUnlatches(action) || action == 0x02 || action == 0x04 || action == 0x06;
+    }
+
+    // May a failed lock action be sent again? Send-once actions only when the
+    // result proves the command never reached the lock.
     inline bool lockActionRetryable(uint8_t action, uint8_t cmdResult)
     {
-        return !lockActionUnlatches(action) || cmdResult == CMD_RESULT_NOT_PAIRED;
+        return !lockActionSentOnce(action) || cmdResult == CMD_RESULT_NOT_PAIRED;
+    }
+
+    // Nuki::CmdResult as an upper-case log token (cmdResultToString has no
+    // Lock_Busy and prints it as "undefined").
+    inline const char* cmdResultLogName(uint8_t cmdResult)
+    {
+        switch(cmdResult)
+        {
+            case 1:  return "SUCCESS";
+            case 2:  return "FAILED";
+            case 3:  return "TIMEOUT";
+            case 4:  return "WORKING";
+            case 5:  return "NOT_PAIRED";
+            case 6:  return "LOCK_BUSY";
+            case 99: return "ERROR";
+            default: return "UNKNOWN";
+        }
     }
 
     // Without an eventId, the (timestamp, key, device) tuple identifies the event.
