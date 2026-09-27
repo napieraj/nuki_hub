@@ -91,7 +91,7 @@ namespace
 {
     constexpr size_t kMaxBody = 4096;
     constexpr size_t kSeenEvents = 16;
-    char seen[kSeenEvents][48] = {};
+    char seen[kSeenEvents][64] = {};
     size_t seenNext = 0;
     // Cooldown per rule (index into PROTECT_WEBHOOK_RULES), so "hold to unlock"
     // followed by "press to lock" isn't blocked. 0 = never accepted.
@@ -233,12 +233,47 @@ bool ProtectWebhook::macMatches(const char* a, const char* b)
     return true;
 }
 
+namespace
+{
+    // A string field, or the Integration API style {"text": "..."} wrapper.
+    const char* fieldText(JsonVariantConst v)
+    {
+        if(v.is<const char*>())
+        {
+            return v.as<const char*>();
+        }
+        if(v["text"].is<const char*>())
+        {
+            return v["text"].as<const char*>();
+        }
+        return nullptr;
+    }
+
+    // Protect sends milliseconds. A value below 1e11 can only be seconds
+    // (1e11 ms is 1973). Negative, zero or after 2100 is treated as missing,
+    // which keeps the skew arithmetic below far from overflow.
+    int64_t normalizeTimestampMs(int64_t ts)
+    {
+        if(ts <= 0)
+        {
+            return 0;
+        }
+        if(ts < 100000000000LL)
+        {
+            ts *= 1000;
+        }
+        return ts > 4102444800000LL ? 0 : ts;
+    }
+}
+
 bool ProtectWebhook::fieldEquals(JsonVariantConst v, const char* want)
 {
-    // Protect may send the discriminator as a string or a number.
-    if(v.is<const char*>())
+    // Protect may send the discriminator as a string, a {"text": ...} wrapper
+    // or a number.
+    const char* text = fieldText(v);
+    if(text != nullptr)
     {
-        return strcasecmp(v.as<const char*>(), want) == 0;
+        return strcasecmp(text, want) == 0;
     }
     if(v.is<long long>())
     {
@@ -253,7 +288,8 @@ bool ProtectWebhook::eventSeen(const char* eventId)
 {
     for(size_t i = 0; i < kSeenEvents; i++)
     {
-        if(seen[i][0] != 0 && strcmp(seen[i], eventId) == 0) return true;
+        // Stored IDs are truncated to 63 chars; compare the same way.
+        if(seen[i][0] != 0 && strncmp(seen[i], eventId, sizeof(seen[0]) - 1) == 0) return true;
     }
     return false;
 }
@@ -336,18 +372,18 @@ esp_err_t ProtectWebhook::handle(PsychicRequest* request, PsychicResponse* resp)
 
     // Older Alarm Manager payloads carry only key/device per trigger; fall back
     // to the envelope timestamp.
-    const int64_t envelopeTs = doc["timestamp"] | (int64_t)0;
+    const int64_t envelopeTs = normalizeTimestampMs(doc["timestamp"] | (int64_t)0);
 
     // 3. Find one trigger that matches a rule (key + device + discriminator).
     for(JsonObjectConst t : triggers)
     {
         const char* key = t["key"] | "";
         const char* device = t["device"] | "";
-        int64_t ts = t["timestamp"] | (int64_t)0;
+        int64_t ts = normalizeTimestampMs(t["timestamp"] | (int64_t)0);
         if(ts == 0) ts = envelopeTs;
 
         // Without an eventId, the (timestamp, key, device) tuple identifies the event.
-        char synthId[48];
+        char synthId[64];
         const char* eventId = t["eventId"] | "";
         if(eventId[0] == 0)
         {
@@ -368,7 +404,12 @@ esp_err_t ProtectWebhook::handle(PsychicRequest* request, PsychicResponse* resp)
         }
         if(rule == nullptr)
         {
-            Log->printf("Protect webhook: no rule for key '%s'\n", key);
+            // Authenticated but unmatched: log what arrived (never the secret
+            // or token) so a changed Protect payload is easy to spot.
+            const char* button = fieldText(t["button"]);
+            const char* value = fieldText(t["value"]);
+            Log->printf("Protect webhook: no rule for key '%s' device '%s' button '%s' value '%s'\n",
+                        key, device, button ? button : "", value ? value : "");
             continue;
         }
         if(ts == 0 || llabs(nowMs - ts) > PROTECT_WEBHOOK_MAX_SKEW_MS)
