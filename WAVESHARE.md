@@ -2,6 +2,8 @@
 
 `pio run -e esp32-s3-waveshare-8di8ro`
 
+Step-by-step setup from an empty board: **`SETUP.md`**.
+
 One board, PoE-powered, bridging a Nuki lock over BLE and taking lock actions
 from a UniFi Protect Alarm Manager webhook. No Wi-Fi, no MQTT broker needed.
 
