@@ -71,7 +71,9 @@ namespace
         {
             return false;
         }
-        bool ok = relaysReady;
+        // Not ready (init failed so far): retry it here. It opens all relays,
+        // which also clears one left closed by a warm reset mid-pulse.
+        bool ok = relaysReady || (relaysReady = initRelays());
         if(ok)
         {
             const uint8_t bit = (uint8_t)(1u << (relay - 1));
@@ -192,7 +194,7 @@ namespace
 void WaveshareBoard::earlyInit()
 {
     // Relays off first (register order: see initRelays). If that fails, the
-    // pins stay inputs and pulseRelay retries the init.
+    // pins stay inputs and the next relay write retries the init.
     // The bus stays up: relays and the RTC use it later, from several tasks
     // (Wire locks each transaction).
     Wire.begin(I2C_SDA, I2C_SCL, 100000);
@@ -310,11 +312,6 @@ bool WaveshareBoard::pulseRelay(int relay, uint32_t pulseMs)
             timer = nullptr;
             return false;
         }
-    }
-    if(!relaysReady && relayLock != nullptr && xSemaphoreTake(relayLock, pdMS_TO_TICKS(500)) == pdTRUE)
-    {
-        relaysReady = initRelays();
-        xSemaphoreGive(relayLock);
     }
     esp_timer_stop(timer); // not running is fine
     const bool closed = setRelay(relay, true, pdMS_TO_TICKS(500));
