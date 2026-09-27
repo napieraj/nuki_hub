@@ -29,6 +29,12 @@ from a UniFi Protect Alarm Manager webhook. No Wi-Fi, no MQTT broker needed.
   webhook can't be switched off by accident: web server **on**, "Disable network
   if not connected" **off**, "Restart on disconnect" **off**. Changing them in the
   web UI has no effect after the next reboot.
+- Every BLE disconnect error and every beacon-watchdog trigger still reboots the
+  whole board (upstream behaviour). Each one is logged in RTC memory with UTC
+  time and uptime; the info page ("System Information") shows the counts since
+  power-on and the last 10 events. Use it to decide whether rate-limiting the
+  reboots is worth it. The beacon timeout is "Restart if bluetooth beacons not received" in
+  the advanced settings (default 60 s).
 - `NUKI_HUB_PROTECT_WEBHOOK` is on: configure `src/ProtectWebhookConfig.h`. KeyFob + Protect setup and bench test: see `PROTECT_SETUP.md`
   (copy the `.example`).
 

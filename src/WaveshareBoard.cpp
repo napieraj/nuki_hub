@@ -6,6 +6,7 @@
 #include <time.h>
 #include "esp_attr.h"
 #include "esp_system.h"
+#include "EspMillis.h"
 
 namespace
 {
@@ -20,6 +21,46 @@ namespace
     constexpr uint32_t TIME_SYNCED_MAGIC = 0x54494d45; // "TIME"
     constexpr time_t TIME_FLOOR = 1767225600;          // 2026-01-01T00:00:00Z
     RTC_NOINIT_ATTR uint32_t timeSyncedMagic;
+
+    constexpr uint32_t BLE_LOG_MAGIC = 0x424c4531; // "BLE1"
+    constexpr size_t BLE_LOG_SIZE = 10;
+
+    struct BleEventEntry
+    {
+        int64_t epoch;    // UTC seconds, 0 if the clock wasn't set
+        int64_t uptimeMs; // espMillis() at the event
+        uint8_t reason;   // WaveshareBoard::BleEvent
+    };
+
+    struct BleEventLog
+    {
+        uint32_t magic;
+        uint32_t errors;      // since power-on
+        uint32_t beaconLost;  // since power-on
+        uint32_t next;        // ring index of the next entry
+        uint32_t stored;      // entries in the ring, <= BLE_LOG_SIZE
+        BleEventEntry events[BLE_LOG_SIZE];
+    };
+
+    RTC_NOINIT_ATTR BleEventLog bleLog;
+    portMUX_TYPE bleLogMux = portMUX_INITIALIZER_UNLOCKED;
+
+    bool isColdBoot()
+    {
+        const esp_reset_reason_t reason = esp_reset_reason();
+        return reason == ESP_RST_POWERON || reason == ESP_RST_BROWNOUT ||
+               reason == ESP_RST_EXT || reason == ESP_RST_UNKNOWN;
+    }
+
+    void initBleLog()
+    {
+        if(isColdBoot() || bleLog.magic != BLE_LOG_MAGIC ||
+           bleLog.next >= BLE_LOG_SIZE || bleLog.stored > BLE_LOG_SIZE)
+        {
+            memset(&bleLog, 0, sizeof(bleLog));
+            bleLog.magic = BLE_LOG_MAGIC;
+        }
+    }
 
     // Only write when the stored value differs, to spare flash.
     void putIntIfDifferent(Preferences* p, const char* key, int value, bool& changed)
@@ -42,6 +83,8 @@ void WaveshareBoard::earlyInit()
     tcaWrite(0x03, 0x00);
     Wire.end();
 
+    initBleLog();
+
     // W5500 hardware reset. An ESP32 reset alone does not reset the W5500.
     pinMode(ETH_RST, OUTPUT);
     digitalWrite(ETH_RST, LOW);
@@ -59,15 +102,66 @@ bool WaveshareBoard::timeSurvivedReset()
 {
     // Power loss, brownout or the reset pin also reset the RTC timer, so time()
     // restarts near 1970; RTC_NOINIT memory is garbage after power-on.
-    const esp_reset_reason_t reason = esp_reset_reason();
-    const bool coldBoot = reason == ESP_RST_POWERON || reason == ESP_RST_BROWNOUT ||
-                          reason == ESP_RST_EXT || reason == ESP_RST_UNKNOWN;
-    if(coldBoot || timeSyncedMagic != TIME_SYNCED_MAGIC || time(nullptr) < TIME_FLOOR)
+    if(isColdBoot() || timeSyncedMagic != TIME_SYNCED_MAGIC || time(nullptr) < TIME_FLOOR)
     {
         timeSyncedMagic = 0;
         return false;
     }
     return true;
+}
+
+void WaveshareBoard::recordBleEvent(uint8_t reason)
+{
+    const time_t now = time(nullptr);
+    BleEventEntry entry;
+    entry.epoch = now >= TIME_FLOOR ? (int64_t)now : 0;
+    entry.uptimeMs = espMillis();
+    entry.reason = reason;
+
+    taskENTER_CRITICAL(&bleLogMux);
+    if(reason == BLE_EVENT_ERROR)
+    {
+        bleLog.errors++;
+    }
+    else if(reason == BLE_EVENT_BEACON_LOST)
+    {
+        bleLog.beaconLost++;
+    }
+    bleLog.events[bleLog.next] = entry;
+    bleLog.next = (bleLog.next + 1) % BLE_LOG_SIZE;
+    if(bleLog.stored < BLE_LOG_SIZE)
+    {
+        bleLog.stored++;
+    }
+    taskEXIT_CRITICAL(&bleLogMux);
+}
+
+void WaveshareBoard::printBleEvents(Print& out)
+{
+    BleEventLog snapshot;
+    taskENTER_CRITICAL(&bleLogMux);
+    memcpy(&snapshot, &bleLog, sizeof(snapshot));
+    taskEXIT_CRITICAL(&bleLogMux);
+
+    out.print("\n------------ BLE EVENTS (since power-on, each one rebooted the board) ------------");
+    out.printf("\nBLE errors: %u", (unsigned)snapshot.errors);
+    out.printf("\nBeacon lost: %u", (unsigned)snapshot.beaconLost);
+    out.printf("\nLast %u (newest first):", (unsigned)snapshot.stored);
+    for(uint32_t i = 0; i < snapshot.stored; i++)
+    {
+        const BleEventEntry& e = snapshot.events[(snapshot.next + BLE_LOG_SIZE - 1 - i) % BLE_LOG_SIZE];
+        char when[24] = "time not set";
+        if(e.epoch > 0)
+        {
+            const time_t t = (time_t)e.epoch;
+            struct tm tmUtc;
+            gmtime_r(&t, &tmUtc);
+            strftime(when, sizeof(when), "%Y-%m-%d %H:%M:%S", &tmUtc);
+        }
+        out.printf("\n  %s UTC | uptime %lld s | %s", when, (long long)(e.uptimeMs / 1000),
+                   e.reason == BLE_EVENT_ERROR ? "BLE error" :
+                   e.reason == BLE_EVENT_BEACON_LOST ? "beacon lost" : "unknown");
+    }
 }
 
 int WaveshareBoard::pinNetworkHardware(Preferences* preferences)

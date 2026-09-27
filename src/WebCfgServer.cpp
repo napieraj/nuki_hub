@@ -44,6 +44,7 @@ static esp_hosted_coprocessor_fwver_t host_version_struct = {
 #include <NetworkClientSecure.h>
 #include "ArduinoJson.h"
 #include "ProtectWebhook.h"
+#include "WaveshareBoard.h"
 #include <freertos/queue.h>
 
 typedef struct
@@ -6145,6 +6146,9 @@ esp_err_t WebCfgServer::buildInfoHtml(PsychicRequest *request, PsychicResponse* 
     response.print(getRestartReason());
     response.print("\nLast restart reason ESP: ");
     response.print(getEspRestartReason());
+#ifdef NUKI_HUB_WAVESHARE_8DI8RO
+    WaveshareBoard::printBleEvents(response);
+#endif
     response.print("\nFree internal heap: ");
     response.print(ESP.getFreeHeap());
     response.print("\nTotal internal heap: ");

@@ -1158,6 +1158,10 @@ bool processLock()
 
     if (nuki->restartController() > 0)
     {
+#ifdef NUKI_HUB_WAVESHARE_8DI8RO
+        // Measurement only: both branches below reboot the board.
+        WaveshareBoard::recordBleEvent(nuki->restartController());
+#endif
         if (lockRestartControllerCount > 3)
         {
             if (nuki->restartController() == 1)

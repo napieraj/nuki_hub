@@ -11,6 +11,8 @@
 //    and the W5500 gets a full hardware reset pulse (its RSTn is on GPIO39).
 //  - BLE TX power defaults to +9 dBm when unset (upstream would silently use +3).
 //  - "Time synced" survives software resets (the webhook needs a valid clock).
+//  - BLE errors and beacon losses (each reboots the board) are logged in
+//    RTC memory and listed on the info page.
 //  - No online updates: update checks, MQTT updates and URL-based OTA are forced
 //    off on every boot and compiled out (Config.h poisons the upstream URLs).
 //  - Thread layout: BT controller, NimBLE host and the nuki task on core 0
@@ -64,6 +66,18 @@ namespace WaveshareBoard
     // a software/watchdog/panic reset, with the flag set and time() plausible.
     void markTimeSynced();
     bool timeSurvivedReset();
+
+    // BLE fault log (M6, measurement only): every BLE disconnect error and
+    // beacon-watchdog trigger that makes processLock() reboot the board is
+    // recorded in RTC_NOINIT memory, so it survives the reboot it causes.
+    // Cleared on power-on. Shown on the web UI info page.
+    enum BleEvent : uint8_t
+    {
+        BLE_EVENT_ERROR = 1,       // NukiWrapper::_restartController == 1
+        BLE_EVENT_BEACON_LOST = 2  // NukiWrapper::_restartController == 2
+    };
+    void recordBleEvent(uint8_t reason);
+    void printBleEvents(Print& out);
 
     // Board defaults, run on every boot after initPreferences(): forces the
     // settings this build depends on, and fills in defaults the user has not set.
