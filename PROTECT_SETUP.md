@@ -8,9 +8,10 @@ USL-FOB ──SuperLink RF──▶ SuperLink Gateway ─▶ Protect Alarm Manag
         "Activity → Button"  ──POST /protect?k=…──▶ Nuki Hub ──BLE──▶ Nuki lock
 ```
 
-The fob has four fixed top buttons (Arm, Disarm, Night, Panic) and two
-programmable side buttons. Use a **side button** for the door so arming,
-disarming or panic never moves the lock.
+The fob has six buttons (Top Left, Top Right, Bottom Left, Bottom Right, Left,
+Right), each with three gestures (**Press, Hold, Double**): 18 distinct events.
+Suggested mapping: **Hold Right = unlock**, **Press Right = lock**. A hold is hard
+to trigger by accident in a pocket, and the face buttons stay free for the alarm.
 
 ### 1. Capture one real press (required)
 Protect does not document how a button press is encoded in the webhook body.
@@ -19,33 +20,35 @@ names the button, and all three come from your own capture:
 
 1. On a laptop on the LAN: `scripts/protect_webhook_test.py listen --port 8099`
 2. Protect → Alarm Manager → Create Alarm:
-   - Trigger: **Activity → Button**, select the fob and the side button
+   - Trigger: **Activity → Button**, select the fob; include every button/gesture for now
    - Action: Webhook → Custom Webhook → `http://<laptop-ip>:8099/capture`,
      Advanced → Method **POST**
 3. Press the button. From the printed JSON note:
    - `triggers[].key` → rule `key`
    - `triggers[].device` → rule `device` (the fob)
-   - the field that identifies the button, and its value → rule `field` / `value`.
-     If the button is only identifiable through a different structure than a
-     flat field in the trigger, stop: the parser needs extending first.
+   - the field(s) that identify the button and the gesture → rule `field`/`value`
+     and `field2`/`value2` (leave `field2`/`value2` as `nullptr` if one field
+     carries both). If they sit in a nested structure rather than flat fields
+     of the trigger, stop: the parser needs extending first.
    - `triggers[].timestamp` should be milliseconds within a second of now, and
      `eventId` present. Both are required by the board.
-4. Press the *other* side button and a top button. Confirm they differ in the
-   field you picked, otherwise a rule could match the wrong button.
+4. Do Press, Hold and Double on the Right button, and Press on the Left
+   button. Confirm all four captures differ in the fields you picked;
+   otherwise a rule could match the wrong button or gesture.
 
 ### 2. Configure the board
 Copy `src/ProtectWebhookConfig.h.example` to `src/ProtectWebhookConfig.h`:
 - `PROTECT_WEBHOOK_SECRET`: `openssl rand -hex 32`
 - `PROTECT_WEBHOOK_SOURCE_IP`: the UniFi OS console
-- `PROTECT_WEBHOOK_RULES`: one line per fob button, e.g. side button 1 → `"unlock"`,
-  side button 2 → `"lock"`. One fob per person, so the fob is the identity.
-  Leave `value` as `nullptr` only if you really want any button of that fob to act.
+- `PROTECT_WEBHOOK_RULES`: one line per button + gesture, e.g. Hold Right → `"unlock"`,
+  Press Right → `"lock"`. One fob per person, so the fob is the identity.
+  Leave `value` as `nullptr` only if you really want any event from that fob to act.
 
 In Nuki Hub → **Nuki Lock Access Control**, allow exactly the actions your rules use.
 
 ### 3. Point the alarm at the board
 Edit the alarm from step 1 (or make one per button):
-- Trigger: Activity → Button → the fob → the side button(s)
+- Trigger: Activity → Button → the fob → only the button/gestures you use
 - Delivery URL: `http://<board-ip>/protect?k=<secret>`, Method **POST**
 
 ### 4. Network
@@ -61,10 +64,11 @@ Edit the alarm from step 1 (or make one per button):
 3. Run, with the values from the capture:
    ```
    scripts/protect_webhook_test.py suite --url http://<board-ip>/protect \
-     --secret <secret> --key <key> --device <fob> --field <field> --value <button>
+     --secret <secret> --key <key> --device <fob> \
+     --field <button-field> --value <button> --field2 <gesture-field> --value2 <gesture>
    ```
-   Expected: 12/12 PASS. Rejections cover a wrong secret, bad JSON, missing triggers,
-   an oversized body, another fob, another button, a wrong trigger key, stale and
+   Expected: 13/13 PASS. Rejections cover a wrong secret, bad JSON, missing triggers,
+   an oversized body, another fob, another button, another gesture, a wrong trigger key, stale and
    future timestamps, replay, and cooldown. The fully valid press returns
    **`403 acl_denied`**, meaning it passed every webhook check and only the ACL stopped it.
 4. Tick the action again, press the real fob, and watch the Nuki Hub log for

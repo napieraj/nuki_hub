@@ -161,6 +161,7 @@ esp_err_t ProtectWebhook::handle(PsychicRequest* request, PsychicResponse* resp)
         {
             if(strcmp(key, r.key) != 0 || !macMatches(device, r.device)) continue;
             if(r.value != nullptr && !fieldEquals(t[r.field], r.value)) continue;
+            if(r.value2 != nullptr && !fieldEquals(t[r.field2], r.value2)) continue;
             rule = &r;
             break;
         }

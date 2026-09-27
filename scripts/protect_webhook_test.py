@@ -38,7 +38,7 @@ import urllib.request
 import uuid
 
 
-def build_event(key, device, field, value, ts_ms=None, event_id=None):
+def build_event(key, device, field, value, ts_ms=None, event_id=None, field2=None, value2=None):
     """Mirror the Alarm Manager envelope around one trigger.
 
     The envelope (alarm.triggers[].{key, device, eventId, timestamp}) is
@@ -53,6 +53,8 @@ def build_event(key, device, field, value, ts_ms=None, event_id=None):
         "timestamp": now,
     }
     trigger[field] = value
+    if field2:
+        trigger[field2] = value2
     return {
         "alarm": {
             "name": "Bench fob test",
@@ -109,7 +111,8 @@ def cmd_listen(args):
 
 def cmd_send(args):
     status, body = post(args.url, args.secret,
-                        build_event(args.key, args.device, args.field, args.value))
+                        build_event(args.key, args.device, args.field, args.value,
+                                    field2=args.field2, value2=args.value2))
     print(status, body)
     return 0 if status in (200, 403) else 1
 
@@ -117,7 +120,9 @@ def cmd_send(args):
 def cmd_suite(args):
     url, secret = args.url, args.secret
     k, d, f, v = args.key, args.device, args.field, args.value
-    ev = lambda **kw: build_event(kw.pop("key", k), kw.pop("device", d), f, kw.pop("value", v), **kw)
+    f2, v2 = args.field2, args.value2
+    ev = lambda **kw: build_event(kw.pop("key", k), kw.pop("device", d), f, kw.pop("value", v),
+                                  field2=f2, value2=kw.pop("value2", v2), **kw)
     now = lambda: int(time.time() * 1000)
     valid_id = uuid.uuid4().hex[:24]
 
@@ -129,6 +134,7 @@ def cmd_suite(args):
         ("oversized body",    secret, b"{" + b" " * 5000 + b"}", 413, "bad_size"),
         ("other fob",         secret, ev(device="00:11:22:33:44:55"), 403, "no_match"),
         ("other button",      secret, ev(value="not-a-configured-button"), 403, "no_match"),
+        ("other gesture",     secret, ev(value2="not-a-configured-gesture"), 403, "no_match"),
         ("wrong trigger key", secret, ev(key="motion"), 403, "no_match"),
         ("stale (-60 s)",     secret, ev(ts_ms=now() - 60_000), 403, "no_match"),
         ("future (+60 s)",    secret, ev(ts_ms=now() + 60_000), 403, "no_match"),
@@ -178,6 +184,8 @@ def main():
         s.add_argument("--device", required=True, help="fob MAC/ID as Protect sends it")
         s.add_argument("--field", default="value", help="trigger field naming the button")
         s.add_argument("--value", required=True, help="button id from the capture")
+        s.add_argument("--field2", help="second field, e.g. the gesture (Press/Hold/Double)")
+        s.add_argument("--value2", help="expected content of --field2")
         if name == "suite":
             s.add_argument("--live", action="store_true",
                            help="expect 200 ack for the valid case (lock moves)")
