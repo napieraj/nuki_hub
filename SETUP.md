@@ -104,7 +104,9 @@ disabled on purpose.
    - **Credentials:** a user and password (Digest or Form auth), then a **TOTP**
      secret or Duo, so the web UI needs a second factor.
    - **Network:** leave the hardware as is (the build pins it to the W5500).
-     Optionally set an NTP server if your DHCP doesn't hand one out (see step 8).
+   - **Nuki Configuration:** "Update Nuki Hub and Lock/Opener time using NTP" is
+     switched on by the build; set the **NTP server** there if your DHCP doesn't
+     hand one out (see step 8).
    - **MQTT:** leave empty. Nothing here needs a broker.
    - **Do not enable HTTPS.** Protect rejects self-signed certificates and doesn't
      follow redirects.
@@ -141,8 +143,11 @@ lock (keypad, turning by hand) only show up at the next status poll.
 - Put the board on its own VLAN. Firewall: allow only `<console-ip> → <board-ip>` TCP 80,
   plus the web UI from your admin machine.
 - **Time is required.** The board refuses presses until its clock is set
-  (`503 no_time`). Give it NTP via DHCP option 42, or set an NTP server in Nuki Hub
-  (default `pool.ntp.org`), and allow UDP 123 from the board to it.
+  (`503 no_time`, log `time not synced`). The build switches on "Update Nuki Hub
+  and Lock/Opener time using NTP" (Nuki Configuration) at every boot. It uses the NTP
+  server from DHCP option 42 if there is one, else the "NTP server" set there
+  (default `pool.ntp.org`). Allow UDP 123 from the board to it. The log shows
+  `NTP time synced` once it works.
 - Bluetooth range: the lock needs a good signal. Mount the antenna outside any
   metal cabinet, with a clear path towards the lock.
 

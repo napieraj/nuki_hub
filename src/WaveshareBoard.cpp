@@ -342,6 +342,12 @@ void WaveshareBoard::applyDefaults(Preferences* preferences)
     {
         preferences->putBool(preference_restart_on_disconnect, false);
     }
+    // The webhook refuses every press without a synced clock, and SNTP only
+    // starts when "Update ... time using NTP" is on (upstream default: off).
+    if(!preferences->getBool(preference_update_time, false))
+    {
+        preferences->putBool(preference_update_time, true);
+    }
 
 #endif
     // Upstream reads an unset TX power as 0 and applies +3 dBm, while its web UI

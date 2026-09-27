@@ -42,7 +42,9 @@ from a UniFi Protect Alarm Manager webhook. No Wi-Fi, no MQTT broker needed.
   affinity and may run on either core.
 - Forced on every boot, whatever the web UI or a config import stored, so the
   webhook can't be switched off by accident: web server **on**, "Disable network
-  if not connected" **off**, "Restart on disconnect" **off**. Changing them in the
+  if not connected" **off**, "Restart on disconnect" **off**, and "Update Nuki Hub
+  and Lock/Opener time using NTP" **on** (without it SNTP never starts and every
+  press gets `503 no_time`). Changing them in the
   web UI has no effect after the next reboot.
 - Every BLE disconnect error and every beacon-watchdog trigger still reboots the
   whole board (upstream behaviour). Each one is logged in RTC memory with UTC
