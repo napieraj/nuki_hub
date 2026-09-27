@@ -1835,6 +1835,15 @@ void setup()
 #endif
 
     timeserver = preferences->getString(preference_time_server, "pool.ntp.org");
+#ifdef NUKI_HUB_WAVESHARE_8DI8RO
+    // A cleared "NTP server" field is stored as "", which SNTP can't resolve;
+    // without a DHCP-provided server the clock would never be set.
+    timeserver.trim();
+    if(timeserver.isEmpty())
+    {
+        timeserver = "pool.ntp.org";
+    }
+#endif
     esp_sntp_config_t config = ESP_NETIF_SNTP_DEFAULT_CONFIG(timeserver.c_str());
     config.start = false;
     config.server_from_dhcp = true;

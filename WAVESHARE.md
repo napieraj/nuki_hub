@@ -20,6 +20,9 @@ from a UniFi Protect Alarm Manager webhook. No Wi-Fi, no MQTT broker needed.
 - Time: every NTP sync is written to the PCF85063 RTC (I2C 0x51, UTC). After a
   power cut the board restores the time from it if the RTC kept running, which
   needs a rechargeable ML1220 (not CR1220) in the holder. Otherwise it waits for NTP.
+  Log: `NTP time synced` then `PCF85063 RTC updated` on every sync (at start, then
+  every 12 h); after a power cut `PCF85063 RTC time: <date> UTC` and `Time restored
+  from the PCF85063 RTC`, or a line saying why not (e.g. `lost its time`).
 - **Relay rules:** a webhook rule with action `relay1`..`relay8` closes that relay
   for `PROTECT_WEBHOOK_RELAY_PULSE_MS` (default 3 s), e.g. wired across an
   intercom's door-open button: relay **COM + NO** in parallel with the button's
