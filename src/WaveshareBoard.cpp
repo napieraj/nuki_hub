@@ -8,7 +8,9 @@
 #include "esp_attr.h"
 #include "esp_system.h"
 #include "EspMillis.h"
+#include "Logger.h"
 #include "esp_timer.h"
+#include "WaveshareRtcLogic.h"
 
 // WS2812 colour order; build with -DWAVESHARE_LED_ORDER=LED_COLOR_ORDER_RGB if
 // "green" shows red.
@@ -59,7 +61,7 @@ namespace
     }
 
     constexpr uint32_t TIME_SYNCED_MAGIC = 0x54494d45; // "TIME"
-    constexpr time_t TIME_FLOOR = 1767225600;          // 2026-01-01T00:00:00Z
+    constexpr time_t TIME_FLOOR = (time_t)WaveshareRtcLogic::TIME_FLOOR; // 2026-01-01T00:00:00Z
     RTC_NOINIT_ATTR uint32_t timeSyncedMagic;
 
     constexpr uint32_t BLE_LOG_MAGIC = 0x424c4532; // "BLE2" (layout version)
@@ -101,28 +103,6 @@ namespace
             memset(&bleLog, 0, sizeof(bleLog));
             bleLog.magic = BLE_LOG_MAGIC;
         }
-    }
-
-    uint8_t toBcd(int v)
-    {
-        return (uint8_t)(((v / 10) << 4) | (v % 10));
-    }
-
-    int fromBcd(uint8_t v)
-    {
-        return (v >> 4) * 10 + (v & 0x0f);
-    }
-
-    // Days since 1970-01-01 for a proleptic Gregorian UTC date (H. Hinnant),
-    // so the RTC conversion doesn't depend on the TZ setting (mktime would).
-    int64_t daysFromCivil(int y, unsigned m, unsigned d)
-    {
-        y -= m <= 2;
-        const int era = (y >= 0 ? y : y - 399) / 400;
-        const unsigned yoe = (unsigned)(y - era * 400);
-        const unsigned doy = (153 * (m + (m > 2 ? -3 : 9)) + 2) / 5 + d - 1;
-        const unsigned doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-        return (int64_t)era * 146097 + (int64_t)doe - 719468;
     }
 
     esp_timer_handle_t statusLedOffTimer = nullptr;
@@ -294,54 +274,84 @@ void WaveshareBoard::flashStatusLed(bool ok)
 
 void WaveshareBoard::storeTimeInRtc()
 {
-    const time_t now = time(nullptr);
-    if(now < TIME_FLOOR)
+    // Called from the SNTP callback (lwIP tcpip thread); Wire locks each
+    // transaction against the relay writes from other tasks.
+    uint8_t t[7];
+    if(!WaveshareRtcLogic::encode((int64_t)time(nullptr), t))
     {
         return;
     }
-    struct tm utc;
-    gmtime_r(&now, &utc);
+    // Decoding assumes 24 h mode and a running clock; clear 12_24 and STOP if
+    // anything (e.g. a demo firmware) set them. CAP_SEL and the rest are kept.
     Wire.beginTransmission(PCF85063_ADDR);
-    Wire.write(0x04);                        // Seconds; writing it clears the OS flag
-    Wire.write(toBcd(utc.tm_sec));
-    Wire.write(toBcd(utc.tm_min));
-    Wire.write(toBcd(utc.tm_hour));          // 24 h mode (Control_1 12_24 = 0, default)
-    Wire.write(toBcd(utc.tm_mday));
-    Wire.write((uint8_t)utc.tm_wday);
-    Wire.write(toBcd(utc.tm_mon + 1));
-    Wire.write(toBcd(utc.tm_year - 100));    // 2000-2099
-    Wire.endTransmission();
+    Wire.write(0x00);
+    bool ok = Wire.endTransmission(false) == 0 && Wire.requestFrom(PCF85063_ADDR, (uint8_t)1) == 1;
+    if(ok)
+    {
+        const uint8_t ctrl1 = Wire.read();
+        if(ctrl1 & (WaveshareRtcLogic::CTRL1_STOP | WaveshareRtcLogic::CTRL1_12_24))
+        {
+            Wire.beginTransmission(PCF85063_ADDR);
+            Wire.write(0x00);
+            Wire.write((uint8_t)(ctrl1 & ~(WaveshareRtcLogic::CTRL1_STOP | WaveshareRtcLogic::CTRL1_12_24)));
+            ok = Wire.endTransmission() == 0;
+        }
+    }
+    if(ok)
+    {
+        Wire.beginTransmission(PCF85063_ADDR);
+        Wire.write(0x04);                    // Seconds; writing it clears the OS flag
+        Wire.write(t, sizeof(t));
+        ok = Wire.endTransmission() == 0;
+    }
+    Log->println(ok ? "PCF85063 RTC updated" : "PCF85063 RTC write failed");
 }
 
 bool WaveshareBoard::restoreTimeFromRtc()
 {
-    uint8_t r[7] = {};
+    // Control_1..Years (0x00..0x0A) in one read.
+    uint8_t r[11] = {};
     Wire.beginTransmission(PCF85063_ADDR);
-    Wire.write(0x04);
-    bool ok = Wire.endTransmission(false) == 0 && Wire.requestFrom(PCF85063_ADDR, (uint8_t)7) == 7;
-    for(int i = 0; ok && i < 7; i++)
+    Wire.write(0x00);
+    bool ok = Wire.endTransmission(false) == 0 && Wire.requestFrom(PCF85063_ADDR, (uint8_t)sizeof(r)) == sizeof(r);
+    for(size_t i = 0; ok && i < sizeof(r); i++)
     {
         r[i] = Wire.read();
     }
-    // Bit 7 of Seconds (OS): the oscillator stopped, e.g. power loss without a
-    // charged backup cell, so the time is invalid.
-    if(!ok || (r[0] & 0x80))
+    if(!ok)
     {
+        Log->println("PCF85063 RTC not readable, waiting for NTP");
         return false;
     }
-    const int sec = fromBcd(r[0] & 0x7f), min = fromBcd(r[1] & 0x7f), hour = fromBcd(r[2] & 0x3f);
-    const int day = fromBcd(r[3] & 0x3f), month = fromBcd(r[5] & 0x1f), year = 2000 + fromBcd(r[6]);
-    if(sec > 59 || min > 59 || hour > 23 || day < 1 || day > 31 || month < 1 || month > 12)
+    int64_t epoch = 0;
+    switch(WaveshareRtcLogic::decode(r[0], &r[4], epoch))
     {
+    case WaveshareRtcLogic::RtcStatus::Ok:
+        break;
+    case WaveshareRtcLogic::RtcStatus::OscillatorStopped:
+        // Power loss without a charged backup cell (or never set): invalid.
+        Log->println("PCF85063 RTC lost its time (no/flat backup cell?), waiting for NTP");
         return false;
-    }
-    const int64_t epoch = daysFromCivil(year, month, day) * 86400 + hour * 3600 + min * 60 + sec;
-    if(epoch < TIME_FLOOR)
-    {
+    case WaveshareRtcLogic::RtcStatus::ClockStopped:
+    case WaveshareRtcLogic::RtcStatus::TwelveHourMode:
+        Log->printf("PCF85063 RTC not in use (Control_1 0x%02x), waiting for NTP\n", r[0]);
+        return false;
+    default:
+        Log->println("PCF85063 RTC holds no plausible date, waiting for NTP");
         return false;
     }
     struct timeval tv = { (time_t)epoch, 0 };
-    return settimeofday(&tv, nullptr) == 0;
+    if(settimeofday(&tv, nullptr) != 0)
+    {
+        return false;
+    }
+    struct tm utc;
+    const time_t now = (time_t)epoch;
+    gmtime_r(&now, &utc);
+    char when[24];
+    strftime(when, sizeof(when), "%Y-%m-%d %H:%M:%S", &utc);
+    Log->printf("PCF85063 RTC time: %s UTC\n", when);
+    return true;
 }
 
 int WaveshareBoard::pinNetworkHardware(Preferences* preferences)

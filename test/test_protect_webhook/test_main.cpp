@@ -107,6 +107,14 @@ void test_freshness()
     TEST_ASSERT_FALSE(isFresh(NOW, NOW - 60000, SKEW)); // stale (-60 s)
     TEST_ASSERT_FALSE(isFresh(NOW, NOW + 60000, SKEW)); // future (+60 s)
     TEST_ASSERT_FALSE(isFresh(NOW, 0, SKEW));           // missing
+    TEST_ASSERT_TRUE(isFresh(NOW, NOW + SKEW, SKEW));
+    TEST_ASSERT_FALSE(isFresh(NOW, NOW + SKEW + 1, SKEW));
+    // Microseconds are out of range, i.e. missing.
+    TEST_ASSERT_FALSE(isFresh(NOW, normalizeTimestampMs(NOW * 1000), SKEW));
+    // An unset board clock (1970, or the RTC's 2000 reset value) never matches
+    // a real event, so a bogus clock fails closed.
+    TEST_ASSERT_FALSE(isFresh(5000, NOW, SKEW));
+    TEST_ASSERT_FALSE(isFresh(946684800000LL, NOW, SKEW));
 }
 
 void test_synthesized_event_id()
