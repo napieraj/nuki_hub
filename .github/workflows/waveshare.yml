@@ -50,22 +50,6 @@ jobs:
         env:
           PLATFORMIO_BUILD_FLAGS: -DPROTECT_WEBHOOK_ALLOW_PLACEHOLDERS
         run: |
-          set +e
-          pio run -e esp32-s3-waveshare-8di8ro 2>&1 | tee build.log
-          status=${PIPESTATUS[0]}
-          set -e
-          elf=.pio/build/esp32-s3-waveshare-8di8ro/firmware.elf
-          if [ "$status" -eq 0 ]; then
-            exit 0
-          fi
-          # Upstream's release packaging always fails afterwards because this fork
-          # doesn't build the updater (updater/release/esp32s3oct/updater.bin).
-          # The firmware itself is good if it linked and nothing else failed.
-          if [ -f "$elf" ] && grep -q "Total image size" build.log \
-             && grep -q "updater.bin: No such file or directory" build.log \
-             && ! grep -qE "(error:|Error [0-9]+$)" build.log; then
-            echo "::notice::firmware.elf built; ignoring the expected updater packaging error"
-            exit 0
-          fi
-          echo "::error::Build failed"
-          exit 1
+          pio run -e esp32-s3-waveshare-8di8ro
+          # This build has no updater; packaging must still produce the app image.
+          test -f release/esp32s3oct/nuki_hub_esp32s3oct.bin

@@ -40,7 +40,13 @@ def copy_files(source, target, env):
 
     if "firmware" in file.stem:
         shutil.copy(file, f"{target_dir}/nuki_hub_{board}{file.suffix}")
-        shutil.copy(f"{project_dir}/updater/release/{board}/updater.bin", f"{target_dir}/nuki_hub_updater_{board}{file.suffix}")
+        updater = f"{project_dir}/updater/release/{board}/updater.bin"
+        # The Waveshare 8DI-8RO build has no updater: don't let the missing
+        # updater.bin abort the build before firmware.bin is written.
+        if not os.path.exists(updater) and "NUKI_HUB_WAVESHARE_8DI8RO" in str(env.GetProjectOption("build_flags", "")):
+            print("No updater.bin for this build, packaging without it")
+        else:
+            shutil.copy(updater, f"{target_dir}/nuki_hub_updater_{board}{file.suffix}")
     elif "bootloader" in file.stem:
         shutil.copy(file, f"{target_dir}/nuki_hub_bootloader_{board}{file.suffix}")
     elif "partitions" in file.stem:
