@@ -10,6 +10,7 @@
 //  - The eight relays (TCA9554 on I2C) are forced off before anything else runs,
 //    and the W5500 gets a full hardware reset pulse (its RSTn is on GPIO39).
 //  - BLE TX power defaults to +9 dBm when unset (upstream would silently use +3).
+//  - "Time synced" survives software resets (the webhook needs a valid clock).
 //  - No online updates: update checks, MQTT updates and URL-based OTA are forced
 //    off on every boot and compiled out (Config.h poisons the upstream URLs).
 //  - Thread layout: BT controller, NimBLE host and the nuki task on core 0
@@ -56,6 +57,13 @@ namespace WaveshareBoard
     // Writes the custom-W5500 network preferences if they differ and returns
     // the hardware-detect value to use (11 = custom LAN).
     int pinNetworkHardware(Preferences* preferences);
+
+    // "NTP time was synced" survives software resets (the RTC keeps time()
+    // running; the flag lives in RTC_NOINIT memory). Call markTimeSynced()
+    // from the SNTP callback; timeSurvivedReset() at boot returns true only after
+    // a software/watchdog/panic reset, with the flag set and time() plausible.
+    void markTimeSynced();
+    bool timeSurvivedReset();
 
     // Board defaults, run on every boot after initPreferences(): forces the
     // settings this build depends on, and fills in defaults the user has not set.

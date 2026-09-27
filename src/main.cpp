@@ -589,6 +589,9 @@ void cbSyncTime(struct timeval *tv)
 {
     Log->println("NTP time synced");
     timeSynced = true;
+#ifdef NUKI_HUB_WAVESHARE_8DI8RO
+    WaveshareBoard::markTimeSynced();
+#endif
 }
 
 #ifndef NUKI_HUB_UPDATER
@@ -1549,6 +1552,11 @@ void setup()
     initPreferences(preferences);
 #ifdef NUKI_HUB_WAVESHARE_8DI8RO
     WaveshareBoard::applyDefaults(preferences);
+    if(WaveshareBoard::timeSurvivedReset())
+    {
+        timeSynced = true;
+        Log->println("Time was synced before this reset, keeping it");
+    }
 #endif
     initializeRestartReason();
 

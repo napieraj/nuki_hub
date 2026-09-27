@@ -3,6 +3,9 @@
 #include "WaveshareBoard.h"
 #include "PreferencesKeys.h"
 #include <Wire.h>
+#include <time.h>
+#include "esp_attr.h"
+#include "esp_system.h"
 
 namespace
 {
@@ -13,6 +16,10 @@ namespace
         Wire.write(value);
         return Wire.endTransmission() == 0;
     }
+
+    constexpr uint32_t TIME_SYNCED_MAGIC = 0x54494d45; // "TIME"
+    constexpr time_t TIME_FLOOR = 1767225600;          // 2026-01-01T00:00:00Z
+    RTC_NOINIT_ATTR uint32_t timeSyncedMagic;
 
     // Only write when the stored value differs, to spare flash.
     void putIntIfDifferent(Preferences* p, const char* key, int value, bool& changed)
@@ -41,6 +48,26 @@ void WaveshareBoard::earlyInit()
     delay(2);
     digitalWrite(ETH_RST, HIGH);
     delay(5);
+}
+
+void WaveshareBoard::markTimeSynced()
+{
+    timeSyncedMagic = TIME_SYNCED_MAGIC;
+}
+
+bool WaveshareBoard::timeSurvivedReset()
+{
+    // Power loss, brownout or the reset pin also reset the RTC timer, so time()
+    // restarts near 1970; RTC_NOINIT memory is garbage after power-on.
+    const esp_reset_reason_t reason = esp_reset_reason();
+    const bool coldBoot = reason == ESP_RST_POWERON || reason == ESP_RST_BROWNOUT ||
+                          reason == ESP_RST_EXT || reason == ESP_RST_UNKNOWN;
+    if(coldBoot || timeSyncedMagic != TIME_SYNCED_MAGIC || time(nullptr) < TIME_FLOOR)
+    {
+        timeSyncedMagic = 0;
+        return false;
+    }
+    return true;
 }
 
 int WaveshareBoard::pinNetworkHardware(Preferences* preferences)

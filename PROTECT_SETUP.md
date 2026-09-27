@@ -70,6 +70,12 @@ One alarm per rule (e.g. "Fob A - Hold Right", "Fob A - Press Right"):
 - Board on its own VLAN. Firewall: allow **only** `<console-ip> → <board-ip>:80`;
   web UI from your admin host only; turn on Duo or TOTP in Nuki Hub.
 - The board needs NTP. It refuses events until its clock is set (`503 no_time`).
+  It uses the NTP server from DHCP (option 42) first, then the "NTP server" set in
+  Nuki Hub (default `pool.ntp.org`). Allow UDP 123 from the board to that server.
+  On an isolated VLAN with neither, **every** press gets `503 no_time`.
+  After a software reset (web UI reboot, watchdog, BLE restart) the clock and the
+  "synced" state are kept, so presses work right away; after a power cut the board
+  waits for NTP again.
 - Protect retries on 5xx/408 only (1 s, then 2 s). A retry of an accepted press
   gets `429 cooldown`, so it never runs twice. If the board is offline, the press is lost (Protect has no queue).
 
