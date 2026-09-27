@@ -51,8 +51,8 @@ Edit `src/ProtectWebhookConfig.h`:
       { "<press token>", "sensor_button_pressed", "AA:BB:CC:DD:EE:01", "button", "right", "value", "press",     "lock"   },
   };
   ```
-  Hold (3 s) to unlock is hard to trigger by accident in a pocket. Use `unlock`,
-  not `unlatch`.
+  Hold (3 s) to unlock is hard to trigger by accident in a pocket. `unlatch` also
+  works; it is never retried after a timeout, so it can't open the door twice.
 
 The build refuses the file if the secret or a token is still a placeholder or too
 short, or a rule is incomplete; the error message says which.

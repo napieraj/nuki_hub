@@ -86,6 +86,27 @@ namespace ProtectWebhookLogic
         return (d[0] >= '1' && d[0] <= '8' && d[1] == 0) ? d[0] - '0' : 0;
     }
 
+    // NukiLock::LockAction values (NukiLockConstants.h) that can release the
+    // latch: Unlatch, LockNgoUnlatch, and the fob actions (their configured
+    // action is unknown here, so they count as unlatching).
+    inline bool lockActionUnlatches(uint8_t action)
+    {
+        return action == 0x03 || action == 0x05 || (action >= 0x81 && action <= 0x83);
+    }
+
+    // Nuki::CmdResult::NotPaired (NukiDataTypes.h). The only lockAction result
+    // returned before anything is written to the lock (NukiBle.hpp executeAction).
+    // TimeOut, Failed and Lock_Busy can each come after the command was sent.
+    constexpr uint8_t CMD_RESULT_NOT_PAIRED = 5;
+
+    // May a failed lock action be sent again? Unlatching actions only when the
+    // result proves the command never reached the lock: a second unlatch opens
+    // the door a second time.
+    inline bool lockActionRetryable(uint8_t action, uint8_t cmdResult)
+    {
+        return !lockActionUnlatches(action) || cmdResult == CMD_RESULT_NOT_PAIRED;
+    }
+
     // Without an eventId, the (timestamp, key, device) tuple identifies the event.
     inline const char* eventIdOrSynth(const char* eventId, int64_t ts, const char* key, const char* device,
                                       char* buf, size_t bufSize)
