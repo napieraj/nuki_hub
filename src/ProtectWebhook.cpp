@@ -77,6 +77,9 @@ static_assert(ProtectWebhookCheck::allRules([](const ProtectRule& r) { return r.
               "a Protect rule with 'value2' needs 'field2'");
 static_assert(ProtectWebhookCheck::allRules([](const ProtectRule& r) { return r.token == nullptr || ProtectWebhookCheck::len(r.token) >= 16; }),
               "Protect rule tokens must be at least 16 characters (openssl rand -hex 16)");
+// A relay closed for minutes (typo, wrong unit) would hold a door open.
+static_assert(PROTECT_WEBHOOK_RELAY_PULSE_MS >= 100 && PROTECT_WEBHOOK_RELAY_PULSE_MS <= 30000,
+              "PROTECT_WEBHOOK_RELAY_PULSE_MS must be 100..30000 (milliseconds)");
 #ifndef PROTECT_WEBHOOK_ALLOW_BROAD_RULES
 static_assert(ProtectWebhookCheck::allRules([](const ProtectRule& r) { return r.token != nullptr || (ProtectWebhookCheck::set(r.key) && r.value != nullptr); }),
               "a Protect rule without a token needs key + value, or it matches ANY event from that fob "

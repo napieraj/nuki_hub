@@ -136,13 +136,14 @@ would have to hold a Protect API key. The webhook keeps credentials off the lock
 ### Response codes
 | Code | Result | Meaning |
 |---|---|---|
-| 200 | `ack` | Queued for the lock task |
+| 200 | `ack` | Queued for the lock task; for a `relayN` rule: relay closed, it opens after `PROTECT_WEBHOOK_RELAY_PULSE_MS` |
 | 400 | `bad_json` / `no_triggers` | Body not a Protect alarm |
 | 403 | `denied` | Wrong source IP or secret |
 | 403 | `no_match` | No rule matched (token/fob/key/button/gesture), or the event was stale |
 | 403 | `acl_denied` | Matched, but the action is disabled in Nuki Hub's ACL |
 | 413 | `bad_size` | Empty or > 4 KB body |
 | 429 | `cooldown` | Replayed event, or < 10 s since the last accepted event for the same rule |
+| 500 | `error` | Lock action couldn't be queued, or the relay's I2C write failed (a retry then gets `429`) |
 | 503 | `no_time` | Clock not synced yet (Protect retries twice) |
 | 503 | `busy` | Another lock action is still queued or being sent (Protect retries twice) |
 | 503 | `ble_stalled` | The BLE (nuki) task hasn't run for 30 s; the board reboots right after replying (also sent briefly after boot, before BLE starts) |

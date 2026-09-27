@@ -207,6 +207,12 @@ void test_relay_actions()
     TEST_ASSERT_EQUAL_INT(0, relayChannel("relay9"));
     TEST_ASSERT_EQUAL_INT(0, relayChannel("relay10"));
     TEST_ASSERT_EQUAL_INT(0, relayChannel("relay"));
+    TEST_ASSERT_EQUAL_INT(0, relayChannel("relay01"));
+    TEST_ASSERT_EQUAL_INT(0, relayChannel("relay1 "));
+    TEST_ASSERT_EQUAL_INT(0, relayChannel(" relay1"));
+    TEST_ASSERT_EQUAL_INT(0, relayChannel("Relay1"));
+    TEST_ASSERT_EQUAL_INT(0, relayChannel("relay-1"));
+    TEST_ASSERT_EQUAL_INT(0, relayChannel(""));
     TEST_ASSERT_EQUAL_INT(0, relayChannel("unlatch"));
     TEST_ASSERT_EQUAL_INT(0, relayChannel(nullptr));
 }

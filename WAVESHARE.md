@@ -29,6 +29,12 @@ from a UniFi Protect Alarm Manager webhook. No Wi-Fi, no MQTT broker needed.
   The log shows `Protect webhook: relay1 -> pulsed`. Before wiring a door, test
   that no relay clicks during a few PoE power cycles and reflashes (the power-up
   state of the TCA9554 driver is not yet proven, see `FINDINGS.md`).
+  The pulse must be 100..30000 ms (build check). If opening the relay fails, the
+  board retries every 100 ms until it succeeds (`relayN: opening failed` in the log).
+  The TCA9554 has no reset line: if the ESP resets mid-pulse (crash, watchdog,
+  BLE reboot), the relay stays closed until the next boot clears it (boot time,
+  measure it on the bench), and while the ESP is held in the bootloader (USB flashing) it stays as
+  it was, so don't flash within a pulse.
 - The eight relays (TCA9554 @ 0x20, I2C SDA 42 / SCL 41) are forced off first thing in `setup()`.
 - GPIO 0 (BOOT), 38 (WS2812), 41/42 (I2C) and 46 (buzzer, strapping pin) can't be
   given a GPIO role. The eight digital inputs DI1-8 are GPIO 4-11 (dry contact to
