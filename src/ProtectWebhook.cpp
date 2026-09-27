@@ -9,6 +9,8 @@
 #include "util/NukiHelper.h"
 #include "ArduinoJson.h"
 #include <time.h>
+#include "lwip/sockets.h"
+#include "lwip/inet.h"
 
 extern bool timeSynced;
 
@@ -92,6 +94,44 @@ namespace
     int64_t lastAcceptedMs[kRules] = {};
     portMUX_TYPE lock = portMUX_INITIALIZER_UNLOCKED;
 
+    // PROTECT_WEBHOOK_SOURCE_IP in network byte order; 0 = check disabled.
+    uint32_t allowedSourceIp = 0;
+
+    // Accept the peer only if it is exactly allowedSourceIp: plain IPv4, or
+    // IPv6 when IPv4-mapped (::ffff:a.b.c.d). Any other IPv6 peer is refused
+    // (PsychicClient::remoteIP() would compare only its low 32 bits).
+    bool sourceIpAllowed(int sock)
+    {
+        struct sockaddr_storage peer;
+        socklen_t peerLen = sizeof(peer);
+        if(getpeername(sock, (struct sockaddr*)&peer, &peerLen) != 0)
+        {
+            return false;
+        }
+        uint32_t ip;
+        if(peer.ss_family == AF_INET)
+        {
+            ip = ((struct sockaddr_in*)&peer)->sin_addr.s_addr;
+        }
+#if LWIP_IPV6
+        else if(peer.ss_family == AF_INET6)
+        {
+            const struct sockaddr_in6* p6 = (const struct sockaddr_in6*)&peer;
+            const uint32_t* w = p6->sin6_addr.un.u32_addr;
+            if(w[0] != 0 || w[1] != 0 || w[2] != PP_HTONL(0x0000ffffUL))
+            {
+                return false;
+            }
+            ip = w[3];
+        }
+#endif
+        else
+        {
+            return false;
+        }
+        return ip == allowedSourceIp;
+    }
+
     esp_err_t reply(PsychicResponse* resp, int code, const char* result)
     {
         char buf[64];
@@ -107,16 +147,29 @@ void ProtectWebhook::registerRoute(PsychicHttpServer* server, NukiWrapper* nuki)
         return;
     }
     // Fail closed: one rule with an unknown action disables the whole route.
-    bool rulesValid = true;
+    bool configValid = true;
     for(const ProtectRule& r : PROTECT_WEBHOOK_RULES)
     {
         if((int)NukiHelper::lockActionToEnum(r.action) == 0xff)
         {
             Log->printf("Protect webhook: unknown action '%s' in ProtectWebhookConfig.h\n", r.action);
-            rulesValid = false;
+            configValid = false;
         }
     }
-    if(!rulesValid)
+    if(strlen(PROTECT_WEBHOOK_SOURCE_IP) > 0)
+    {
+        struct in_addr parsed;
+        if(inet_pton(AF_INET, PROTECT_WEBHOOK_SOURCE_IP, &parsed) != 1 || parsed.s_addr == 0)
+        {
+            Log->printf("Protect webhook: invalid PROTECT_WEBHOOK_SOURCE_IP '%s'\n", PROTECT_WEBHOOK_SOURCE_IP);
+            configValid = false;
+        }
+        else
+        {
+            allowedSourceIp = parsed.s_addr;
+        }
+    }
+    if(!configValid)
     {
         Log->println("Protect webhook disabled: fix ProtectWebhookConfig.h");
         return;
@@ -208,8 +261,7 @@ namespace
 esp_err_t ProtectWebhook::handle(PsychicRequest* request, PsychicResponse* resp)
 {
     // 1. Transport checks: source IP, secret, size.
-    if(strlen(PROTECT_WEBHOOK_SOURCE_IP) > 0 &&
-       request->client()->remoteIP().toString() != PROTECT_WEBHOOK_SOURCE_IP)
+    if(strlen(PROTECT_WEBHOOK_SOURCE_IP) > 0 && !sourceIpAllowed(request->client()->socket()))
     {
         Log->println("Protect webhook: rejected source IP");
         return reply(resp, 403, "denied");
