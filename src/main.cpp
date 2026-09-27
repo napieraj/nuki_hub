@@ -11,6 +11,7 @@
 #include "esp_heap_caps.h"
 #endif
 #include "Config.h"
+#include "WaveshareBoard.h"
 #include "esp32-hal-log.h"
 #include "esp32-hal-bt-mem.h"
 #include "hal/wdt_hal.h"
@@ -658,6 +659,9 @@ void startWebServer()
                     psychicSSLServer->ssl_config.httpd.max_open_sockets = 8;
                     psychicSSLServer->setCertificate(cert, key);
                     psychicSSLServer->config.stack_size = HTTPD_TASK_SIZE;
+#ifdef NUKI_HUB_WAVESHARE_8DI8RO
+                    psychicSSLServer->config.core_id = WaveshareBoard::NETWORK_CORE;
+#endif
                     webCfgServerSSL = new WebCfgServer(nuki, nukiOpener, network, gpio, preferences, network->networkDeviceType() == NetworkDeviceType::WiFi, partitionType, psychicSSLServer, importExport);
                     webCfgServerSSL->initialize();
                     psychicSSLServer->onNotFound([](PsychicRequest* request, PsychicResponse* response)
@@ -676,6 +680,9 @@ void startWebServer()
     {
         psychicServer = new PsychicHttpServer;
         psychicServer->config.stack_size = HTTPD_TASK_SIZE;
+#ifdef NUKI_HUB_WAVESHARE_8DI8RO
+        psychicServer->config.core_id = WaveshareBoard::NETWORK_CORE;
+#endif
         webCfgServer = new WebCfgServer(nuki, nukiOpener, network, gpio, preferences, network->networkDeviceType() == NetworkDeviceType::WiFi, partitionType, psychicServer, importExport);
         webCfgServer->initialize();
         psychicServer->onNotFound([](PsychicRequest* request, PsychicResponse* response)
@@ -1504,6 +1511,9 @@ void logCoreDump()
 
 void setup()
 {
+#ifdef NUKI_HUB_WAVESHARE_8DI8RO
+    WaveshareBoard::relaysOff();
+#endif
 #if defined(CONFIG_SOC_SPIRAM_SUPPORTED) && defined(CONFIG_SPIRAM)
 #ifndef FORCE_NUKI_HUB_HTTPS_SERVER
     if(esp_psram_get_size() <= 0)
@@ -1656,6 +1666,9 @@ void setup()
                         psychicSSLServer->ssl_config.httpd.max_open_sockets = 8;
                         psychicSSLServer->setCertificate(cert, key);
                         psychicSSLServer->config.stack_size = HTTPD_TASK_SIZE;
+#ifdef NUKI_HUB_WAVESHARE_8DI8RO
+                    psychicSSLServer->config.core_id = WaveshareBoard::NETWORK_CORE;
+#endif
                         webCfgServerSSL = new WebCfgServer(network, preferences, network->networkDeviceType() == NetworkDeviceType::WiFi, partitionType, psychicSSLServer, importExport);
                         webCfgServerSSL->initialize();
                         psychicSSLServer->onNotFound([](PsychicRequest* request, PsychicResponse* response)
@@ -1674,6 +1687,9 @@ void setup()
         {
             psychicServer = new PsychicHttpServer;
             psychicServer->config.stack_size = HTTPD_TASK_SIZE;
+#ifdef NUKI_HUB_WAVESHARE_8DI8RO
+        psychicServer->config.core_id = WaveshareBoard::NETWORK_CORE;
+#endif
             webCfgServer = new WebCfgServer(network, preferences, network->networkDeviceType() == NetworkDeviceType::WiFi, partitionType, psychicServer, importExport);
             webCfgServer->initialize();
             psychicServer->onNotFound([](PsychicRequest* request, PsychicResponse* response)

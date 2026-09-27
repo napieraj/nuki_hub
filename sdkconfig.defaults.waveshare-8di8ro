@@ -1,0 +1,4 @@
+# Waveshare ESP32-S3-POE-ETH-8DI-8RO single-board build:
+# keep lwIP on core 1 with the network task and httpd; core 0 stays with BLE.
+CONFIG_LWIP_TCPIP_TASK_AFFINITY_NO_AFFINITY=n
+CONFIG_LWIP_TCPIP_TASK_AFFINITY_CPU1=y

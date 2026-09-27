@@ -1,4 +1,5 @@
 #include "NukiNetwork.h"
+#include "WaveshareBoard.h"
 #include "PreferencesKeys.h"
 #include "Logger.h"
 #include "Config.h"
@@ -47,6 +48,11 @@ void NukiNetwork::setupDevice()
 {
     _ipConfiguration = new IPConfiguration(_preferences);
     int hardwareDetect = _preferences->getInt(preference_network_hardware, 0);
+#ifdef NUKI_HUB_WAVESHARE_8DI8RO
+    // Single-board Waveshare build: always the on-board W5500, never Wi-Fi.
+    hardwareDetect = WaveshareBoard::pinNetworkHardware(_preferences);
+    wifiFallback = false;
+#endif
     Log->print("Hardware detect: ");
     Log->println(hardwareDetect);
 
