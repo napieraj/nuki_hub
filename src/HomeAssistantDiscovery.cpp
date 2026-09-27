@@ -372,6 +372,7 @@ void HomeAssistantDiscovery::publishHASSNukiHubConfig()
                      "",
     { { (char*)"en", (char*)"true" }});
 
+#ifndef NUKI_HUB_WAVESHARE_8DI8RO
     if(_preferences->getBool(preference_check_updates, false))
     {
         // Nuki Hub latest
@@ -445,6 +446,7 @@ void HomeAssistantDiscovery::publishHASSNukiHubConfig()
         }
     }
     else
+#endif
     {
         removeHassTopic((char*)"sensor", (char*)"nuki_hub_latest", _nukiHubUidString);
         removeHassTopic((char*)"update", (char*)"nuki_hub_update", _nukiHubUidString);

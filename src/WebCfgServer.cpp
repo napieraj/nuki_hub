@@ -1685,13 +1685,15 @@ esp_err_t WebCfgServer::buildOtaHtml(PsychicRequest *request, PsychicResponse* r
     if(_partitionType == 0)
     {
         response.print("<h4 class=\"warning\">You are currently running Nuki Hub with an outdated partition scheme. Because of this you cannot use OTA to update to 9.00 or higher. Please check GitHub for instructions on how to update to 9.00 and the new partition scheme</h4>");
+#ifndef NUKI_HUB_WAVESHARE_8DI8RO
         response.print("<button title=\"Open latest release on GitHub\" onclick=\" window.open('");
         response.print(GITHUB_LATEST_RELEASE_URL);
         response.print("', '_blank'); return false;\">Open latest release on GitHub</button>");
+#endif
         return response.endSend();
     }
 
-#ifndef NUKI_HUB_UPDATER
+#if !defined(NUKI_HUB_UPDATER) && !defined(NUKI_HUB_WAVESHARE_8DI8RO)
     bool manifestSuccess = false;
     JsonDocument doc;
 
@@ -1846,6 +1848,17 @@ esp_err_t WebCfgServer::buildOtaHtml(PsychicRequest *request, PsychicResponse* r
             _preferences->putString(preference_latest_version, latestVersion);
         }
     }
+#elif defined(NUKI_HUB_WAVESHARE_8DI8RO)
+    response.print("<div id=\"msgdiv\" style=\"visibility:hidden\">Uploading, please be patient.</div>");
+    response.print("<div id=\"autoupdform\"><h4>Update Nuki Hub</h4>");
+    response.print("Online updates are disabled in this build. Flash via USB, or upload a locally built image below.<br>");
+    response.print("<b>Current version: </b><span id=\"currentver\">");
+    response.print(NUKI_HUB_VERSION);
+    response.print(" (");
+    response.print(NUKI_HUB_BUILD);
+    response.print(")</span>, ");
+    response.print(NUKI_HUB_DATE);
+    response.print("<br>");
 #endif
     response.print("<br></div>");
 
@@ -1874,6 +1887,7 @@ esp_err_t WebCfgServer::buildOtaHtml(PsychicRequest *request, PsychicResponse* r
         response.print("<form enctype=\"multipart/form-data\" action=\"/uploadota\" method=\"post\">Choose the nuki_hub.bin file to upload: <input name=\"uploadedfile\" type=\"file\" accept=\".bin\" /><br/>");
     }
     response.print("<br><input id=\"submitbtn\" type=\"submit\" value=\"Upload File\" /></form><br><br></div>");
+#ifndef NUKI_HUB_WAVESHARE_8DI8RO
     response.print("<div id=\"gitdiv\">");
     response.print("<h4>GitHub</h4><br>");
     response.print("<button title=\"Open latest release on GitHub\" onclick=\" window.open('");
@@ -1885,6 +1899,9 @@ esp_err_t WebCfgServer::buildOtaHtml(PsychicRequest *request, PsychicResponse* r
     response.print("<br><br><button title=\"Download latest updater binary from GitHub\" onclick=\" window.open('");
     response.print(GITHUB_LATEST_UPDATER_BINARY_URL);
     response.print("'); return false;\">Download latest updater binary from GitHub</button></div></div>");
+#else
+    response.print("<div id=\"gitdiv\"></div></div>");
+#endif
     response.print("<script type=\"text/javascript\">");
     response.print("window.addEventListener('load', function () {");
     response.print("	var button = document.getElementById(\"submitbtn\");");
@@ -6907,6 +6924,10 @@ esp_err_t WebCfgServer::processUnpair(PsychicRequest *request, PsychicResponse* 
 
 esp_err_t WebCfgServer::processUpdate(PsychicRequest *request, PsychicResponse* resp)
 {
+#ifdef NUKI_HUB_WAVESHARE_8DI8RO
+    Log->println("Online update refused: disabled in this build");
+    return resp->send(403, "text/plain", "Updates are disabled in this build; flash via USB.");
+#else
     esp_err_t res;
     String value = "";
     if(request->hasParam("CONFIRMTOKEN"))
@@ -6985,6 +7006,7 @@ esp_err_t WebCfgServer::processUpdate(PsychicRequest *request, PsychicResponse* 
     waitAndProcess(true, 1000);
     restartEsp(RestartReason::OTAReboot);
     return res;
+#endif
 }
 
 esp_err_t WebCfgServer::processFactoryReset(PsychicRequest *request, PsychicResponse* resp)

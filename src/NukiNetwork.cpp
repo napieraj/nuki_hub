@@ -576,6 +576,7 @@ bool NukiNetwork::update()
         _lastMaintenanceTs = ts;
     }
 
+#ifndef NUKI_HUB_WAVESHARE_8DI8RO
     if(_checkUpdates && (!_haEnabled || (_haEnabled && _haSetupDone)) && _hasInternet)
     {
         if(_lastUpdateCheckTs == 0 || (ts - _lastUpdateCheckTs) > 86400000)
@@ -642,6 +643,7 @@ bool NukiNetwork::update()
             }
         }
     }
+#endif
 
     for(const auto& gpioTs : _gpioTs)
     {
@@ -1033,6 +1035,7 @@ void NukiNetwork::onMqttDataReceived(const char* topic, byte* payload, const uns
         espDelayAck(200);
         restartEsp(RestartReason::RequestedViaMqtt);
     }
+#ifndef NUKI_HUB_WAVESHARE_8DI8RO
     else if(comparePrefixedPath(topic, mqtt_topic_update) && strcmp(data, "1") == 0 && _preferences->getBool(preference_update_from_mqtt, false) && !mqttRecentlyConnected() && _hasInternet)
     {
         Log->println("Update requested via MQTT.");
@@ -1138,6 +1141,7 @@ void NukiNetwork::onMqttDataReceived(const char* topic, byte* payload, const uns
             Log->println("Failed to retrieve OTA manifest, OTA update aborted.");
         }
     }
+#endif
     else if(comparePrefixedPath(topic, mqtt_topic_webserver_action) && !mqttRecentlyConnected())
     {
         if(strcmp(data, "") == 0 || strcmp(data, "--") == 0) return;

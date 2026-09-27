@@ -1574,11 +1574,13 @@ void setup()
         ethCriticalFailure = false;
     }
 
+#ifndef NUKI_HUB_WAVESHARE_8DI8RO
     //determine if an OTA update was requested
     if((partitionType==1 && preferences->getString(preference_ota_updater_url, "").length() > 0) || (partitionType==2 && preferences->getString(preference_ota_main_url, "").length() > 0))
     {
         doOta = true;
     }
+#endif
 
 #ifdef NUKI_HUB_UPDATER
     Log->print("Nuki Hub OTA version ");

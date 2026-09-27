@@ -10,6 +10,8 @@
 //  - The eight relays (TCA9554 on I2C) are forced off before anything else runs,
 //    and the W5500 gets a full hardware reset pulse (its RSTn is on GPIO39).
 //  - BLE TX power defaults to +9 dBm when unset (upstream would silently use +3).
+//  - No online updates: update checks, MQTT updates and URL-based OTA are forced
+//    off on every boot and compiled out (Config.h poisons the upstream URLs).
 //  - Thread layout: BT controller, NimBLE host and the nuki task on core 0
 //    (upstream defaults); network task, lwIP and httpd on core 1.
 //
@@ -55,7 +57,8 @@ namespace WaveshareBoard
     // the hardware-detect value to use (11 = custom LAN).
     int pinNetworkHardware(Preferences* preferences);
 
-    // Board defaults that only apply when the user has not set a value.
+    // Board defaults, run on every boot after initPreferences(): forces the
+    // settings this build depends on, and fills in defaults the user has not set.
     void applyDefaults(Preferences* preferences);
 }
 

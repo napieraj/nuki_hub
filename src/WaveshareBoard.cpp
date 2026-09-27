@@ -64,6 +64,26 @@ int WaveshareBoard::pinNetworkHardware(Preferences* preferences)
 
 void WaveshareBoard::applyDefaults(Preferences* preferences)
 {
+    // Never pull firmware from upstream: no update checks, no MQTT-triggered
+    // update, no pending URL-based OTA (a config import or the advanced page
+    // could otherwise store one). Enforced on every boot.
+    if(preferences->getBool(preference_check_updates, true))
+    {
+        preferences->putBool(preference_check_updates, false);
+    }
+    if(preferences->getBool(preference_update_from_mqtt, true))
+    {
+        preferences->putBool(preference_update_from_mqtt, false);
+    }
+    if(preferences->isKey(preference_ota_updater_url) && preferences->getString(preference_ota_updater_url, "").length() > 0)
+    {
+        preferences->putString(preference_ota_updater_url, "");
+    }
+    if(preferences->isKey(preference_ota_main_url) && preferences->getString(preference_ota_main_url, "").length() > 0)
+    {
+        preferences->putString(preference_ota_main_url, "");
+    }
+
     // Upstream reads an unset TX power as 0 and applies +3 dBm, while its web UI
     // shows 9 on S3, so re-saving "9" is a no-op. Make the default explicit.
     if(!preferences->isKey(preference_ble_tx_power))
