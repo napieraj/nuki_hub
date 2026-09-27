@@ -42,8 +42,11 @@
 //   value    expected button                      e.g. "right"
 //   field2   trigger field naming the gesture     "value"
 //   value2   expected gesture                     e.g. "longPress"
-//   action   Nuki Hub lock action: "unlock", "lock", "lockngo", ...
+//   action   Nuki Hub lock action: "unlock", "lock", "unlatch", "lockngo", ...
 //            still subject to Nuki Hub's "Nuki Lock Access Control" ACL.
+//            Or, on the Waveshare 8DI-8RO build, "relay1".."relay8": close that
+//            relay for PROTECT_WEBHOOK_RELAY_PULSE_MS (e.g. wired across an
+//            intercom's door-open button). The ACL doesn't apply to relays.
 //            Prefer "unlock" over "unlatch": a timed-out command is retried,
 //            and a repeated unlock is harmless where a repeated unlatch is not.
 // A rule with neither token nor key+value would match ANY event from that fob;
@@ -86,3 +89,6 @@ static constexpr ProtectRule PROTECT_WEBHOOK_RULES[] = {
 // If the nuki task (BLE) hasn't looped or started a BLE attempt for this long
 // when a matching press arrives, reply 503 ble_stalled and reboot the board.
 #define PROTECT_WEBHOOK_BLE_STALL_MS 30000
+
+// How long a "relayN" action keeps the relay closed (Waveshare 8DI-8RO build).
+#define PROTECT_WEBHOOK_RELAY_PULSE_MS 3000

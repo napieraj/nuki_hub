@@ -20,6 +20,15 @@ from a UniFi Protect Alarm Manager webhook. No Wi-Fi, no MQTT broker needed.
 - Time: every NTP sync is written to the PCF85063 RTC (I2C 0x51, UTC). After a
   power cut the board restores the time from it if the RTC kept running, which
   needs a rechargeable ML1220 (not CR1220) in the holder. Otherwise it waits for NTP.
+- **Relay rules:** a webhook rule with action `relay1`..`relay8` closes that relay
+  for `PROTECT_WEBHOOK_RELAY_PULSE_MS` (default 3 s), e.g. wired across an
+  intercom's door-open button: relay **COM + NO** in parallel with the button's
+  two contacts. That only works if the button is a plain dry contact; 2-wire bus
+  intercoms need their own interface. Relay rules skip the lock checks (BLE,
+  busy) and Nuki Lock Access Control; replay, cooldown and all auth still apply.
+  The log shows `Protect webhook: relay1 -> pulsed`. Before wiring a door, test
+  that no relay clicks during a few PoE power cycles and reflashes (the power-up
+  state of the TCA9554 driver is not yet proven, see `FINDINGS.md`).
 - The eight relays (TCA9554 @ 0x20, I2C SDA 42 / SCL 41) are forced off first thing in `setup()`.
 - GPIO 0 (BOOT), 38 (WS2812), 41/42 (I2C) and 46 (buzzer, strapping pin) can't be
   given a GPIO role. The eight digital inputs DI1-8 are GPIO 4-11 (dry contact to

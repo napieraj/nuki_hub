@@ -26,6 +26,38 @@ namespace
         return Wire.endTransmission() == 0;
     }
 
+    // Relays: shadow of the TCA9554 output register. relayLock serializes the
+    // read-modify-write plus its I2C write (httpd task and esp_timer task).
+    uint8_t relayOutputs = 0;
+    SemaphoreHandle_t relayLock = nullptr;
+    esp_timer_handle_t relayOffTimers[WaveshareBoard::RELAY_COUNT] = {};
+
+    bool setRelay(int relay, bool on)
+    {
+        if(relayLock == nullptr || xSemaphoreTake(relayLock, pdMS_TO_TICKS(500)) != pdTRUE)
+        {
+            return false;
+        }
+        const uint8_t bit = (uint8_t)(1u << (relay - 1));
+        const uint8_t out = on ? (relayOutputs | bit) : (relayOutputs & ~bit);
+        const bool ok = tcaWrite(0x01, out);
+        if(ok)
+        {
+            relayOutputs = out;
+        }
+        xSemaphoreGive(relayLock);
+        return ok;
+    }
+
+    void relayOff(void* arg)
+    {
+        // Retry: a relay left closed would keep the door open.
+        for(int i = 0; i < 3 && !setRelay((int)(intptr_t)arg, false); i++)
+        {
+            vTaskDelay(pdMS_TO_TICKS(20));
+        }
+    }
+
     constexpr uint32_t TIME_SYNCED_MAGIC = 0x54494d45; // "TIME"
     constexpr time_t TIME_FLOOR = 1767225600;          // 2026-01-01T00:00:00Z
     RTC_NOINIT_ATTR uint32_t timeSyncedMagic;
@@ -116,10 +148,12 @@ void WaveshareBoard::earlyInit()
     // Relays: output register (0x01) low first, then all pins to outputs (0x03).
     // The TCA9554 powers up with outputs latched high and pins as inputs, and it
     // has no reset line, so this order matters. Never swap it.
+    // The bus stays up: relays and the RTC use it later, from several tasks
+    // (Wire locks each transaction).
     Wire.begin(I2C_SDA, I2C_SCL, 100000);
     tcaWrite(0x01, 0x00);
     tcaWrite(0x03, 0x00);
-    Wire.end();
+    relayLock = xSemaphoreCreateMutex();
 
     initBleLog();
 
@@ -211,6 +245,34 @@ void WaveshareBoard::printBleEvents(Print& out)
     }
 }
 
+bool WaveshareBoard::pulseRelay(int relay, uint32_t pulseMs)
+{
+    if(relay < 1 || relay > RELAY_COUNT)
+    {
+        return false;
+    }
+    esp_timer_handle_t& timer = relayOffTimers[relay - 1];
+    if(timer == nullptr)
+    {
+        esp_timer_create_args_t args = {};
+        args.callback = relayOff;
+        args.arg = (void*)(intptr_t)relay;
+        args.name = "relayOff";
+        if(esp_timer_create(&args, &timer) != ESP_OK)
+        {
+            timer = nullptr;
+            return false;
+        }
+    }
+    esp_timer_stop(timer); // not running is fine
+    if(!setRelay(relay, true))
+    {
+        return false;
+    }
+    esp_timer_start_once(timer, (uint64_t)pulseMs * 1000);
+    return true;
+}
+
 void WaveshareBoard::flashStatusLed(bool ok)
 {
     // Only called from the httpd task; the off timer runs in the esp_timer task.
@@ -239,7 +301,6 @@ void WaveshareBoard::storeTimeInRtc()
     }
     struct tm utc;
     gmtime_r(&now, &utc);
-    Wire.begin(I2C_SDA, I2C_SCL, 100000);
     Wire.beginTransmission(PCF85063_ADDR);
     Wire.write(0x04);                        // Seconds; writing it clears the OS flag
     Wire.write(toBcd(utc.tm_sec));
@@ -250,13 +311,11 @@ void WaveshareBoard::storeTimeInRtc()
     Wire.write(toBcd(utc.tm_mon + 1));
     Wire.write(toBcd(utc.tm_year - 100));    // 2000-2099
     Wire.endTransmission();
-    Wire.end();
 }
 
 bool WaveshareBoard::restoreTimeFromRtc()
 {
     uint8_t r[7] = {};
-    Wire.begin(I2C_SDA, I2C_SCL, 100000);
     Wire.beginTransmission(PCF85063_ADDR);
     Wire.write(0x04);
     bool ok = Wire.endTransmission(false) == 0 && Wire.requestFrom(PCF85063_ADDR, (uint8_t)7) == 7;
@@ -264,7 +323,6 @@ bool WaveshareBoard::restoreTimeFromRtc()
     {
         r[i] = Wire.read();
     }
-    Wire.end();
     // Bit 7 of Seconds (OS): the oscillator stopped, e.g. power loss without a
     // charged backup cell, so the time is invalid.
     if(!ok || (r[0] & 0x80))

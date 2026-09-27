@@ -199,6 +199,18 @@ void test_replay_cache_is_bounded()
     TEST_ASSERT_TRUE(guard.accept("a", 0, NOW, 0));      // forgotten; freshness check covers this
 }
 
+void test_relay_actions()
+{
+    TEST_ASSERT_EQUAL_INT(1, relayChannel("relay1"));
+    TEST_ASSERT_EQUAL_INT(8, relayChannel("relay8"));
+    TEST_ASSERT_EQUAL_INT(0, relayChannel("relay0"));
+    TEST_ASSERT_EQUAL_INT(0, relayChannel("relay9"));
+    TEST_ASSERT_EQUAL_INT(0, relayChannel("relay10"));
+    TEST_ASSERT_EQUAL_INT(0, relayChannel("relay"));
+    TEST_ASSERT_EQUAL_INT(0, relayChannel("unlatch"));
+    TEST_ASSERT_EQUAL_INT(0, relayChannel(nullptr));
+}
+
 void test_rule_index_out_of_range()
 {
     ReplayGuard<1> guard;
@@ -221,6 +233,7 @@ int main()
     RUN_TEST(test_first_event_at_time_zero);
     RUN_TEST(test_long_event_ids_still_replay_protected);
     RUN_TEST(test_replay_cache_is_bounded);
+    RUN_TEST(test_relay_actions);
     RUN_TEST(test_rule_index_out_of_range);
     return UNITY_END();
 }

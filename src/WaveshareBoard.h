@@ -8,6 +8,7 @@
 //    the web UI or a bootloop reset stored. Wi-Fi is never started: no station,
 //    no fallback, no "NukiHub" access point. If Ethernet fails, the ESP reboots.
 //  - The eight relays (TCA9554 on I2C) are forced off before anything else runs,
+//    and a webhook rule can pulse one (action "relay1".."relay8");
 //    and the W5500 gets a full hardware reset pulse (its RSTn is on GPIO39).
 //  - BLE TX power defaults to +9 dBm when unset (upstream would silently use +3).
 //  - The WS2812 flashes green/red after each authenticated webhook call.
@@ -49,6 +50,7 @@ namespace WaveshareBoard
     constexpr int I2C_SCL = 41;
     constexpr uint8_t TCA9554_ADDR = 0x20;
     constexpr uint8_t PCF85063_ADDR = 0x51;
+    constexpr int RELAY_COUNT = 8;
 
     // WS2812 status LED
     constexpr int STATUS_LED = 38;
@@ -91,6 +93,12 @@ namespace WaveshareBoard
         BLE_EVENT_STALLED = 3      // webhook found the nuki task stalled (L13)
     };
     void recordBleEvent(uint8_t reason);
+
+    // Close relay 1-8 (TCA9554 output 0-7) for pulseMs, then open it again.
+    // Non-blocking (an esp_timer opens it); a new pulse on the same relay
+    // restarts the time. Call from one task only (the httpd task). Returns
+    // false if the relay number is invalid or the I2C write failed.
+    bool pulseRelay(int relay, uint32_t pulseMs);
 
     // Short flash on the WS2812 (GPIO 38) after an authenticated webhook:
     // green = action queued, red = no rule matched or refused. Non-blocking.

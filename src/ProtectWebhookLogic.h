@@ -74,6 +74,18 @@ namespace ProtectWebhookLogic
         return strcmp(buf, want) == 0;
     }
 
+    // Rule action "relay1".."relay8" -> relay 1..8 on the board; anything else 0
+    // (a Nuki lock action).
+    inline int relayChannel(const char* action)
+    {
+        if(action == nullptr || strncmp(action, "relay", 5) != 0)
+        {
+            return 0;
+        }
+        const char* d = action + 5;
+        return (d[0] >= '1' && d[0] <= '8' && d[1] == 0) ? d[0] - '0' : 0;
+    }
+
     // Without an eventId, the (timestamp, key, device) tuple identifies the event.
     inline const char* eventIdOrSynth(const char* eventId, int64_t ts, const char* key, const char* device,
                                       char* buf, size_t bufSize)
