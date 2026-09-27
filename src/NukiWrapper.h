@@ -40,7 +40,12 @@ public:
 
     const NukiLock::KeyTurnerState& keyTurnerState();
     const bool isPaired() const;
-    LockActionResult requestLockAction(const char* action);
+#ifdef NUKI_HUB_PROTECT_WEBHOOK
+    // Queue a lock action through the MQTT path (same ACL). deadlineTs is an
+    // espMillis() timestamp: if the action hasn't been sent to the lock by then
+    // (first attempt or any retry), it's dropped. 0 = no deadline.
+    LockActionResult requestLockAction(const char* action, int64_t deadlineTs);
+#endif
     const bool hasKeypad() const;
     bool hasDoorSensor() const;
     const bool offConnected();
@@ -178,6 +183,13 @@ private:
     std::string _hardwareVersion = "";
     DoorSensorOverride _requestDoorSensorOverride = DoorSensorOverride::NoOverride;
     volatile NukiLock::LockAction _nextLockAction = (NukiLock::LockAction)0xff;
+#ifdef NUKI_HUB_PROTECT_WEBHOOK
+    bool lockActionExpired(const int64_t& ts);
+    void clearLockActionDeadline();
+    int64_t _nextLockActionDeadlineTs = 0;
+    NukiLock::LockAction _nextLockActionDeadlineFor = (NukiLock::LockAction)0xff;
+    portMUX_TYPE _nextLockActionDeadlineMux = portMUX_INITIALIZER_UNLOCKED;
+#endif
     GpioAction gpioAction = GpioAction::None;
     std::vector<uint8_t> _pinsHighWhenDoorOpen;
     std::vector<uint8_t> _pinsHighWhenDoorClosed;

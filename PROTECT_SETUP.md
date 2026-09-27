@@ -78,6 +78,10 @@ One alarm per rule (e.g. "Fob A - Hold Right", "Fob A - Press Right"):
   waits for NTP again.
 - Protect retries on 5xx/408 only (1 s, then 2 s). A retry of an accepted press
   gets `429 cooldown`, so it never runs twice. If the board is offline, the press is lost (Protect has no queue).
+- `200 ack` means *queued*, not *done*. If the lock can't be reached (out of BLE
+  range, busy), a queued action that hasn't been sent within 8 s
+  (`PROTECT_WEBHOOK_ACTION_DEADLINE_MS`) is dropped and the log shows
+  `Lock action expired`, so the door never opens long after the press.
 
 ### 5. Bench test without moving the lock
 1. In **Nuki Lock Access Control**, untick the action the rule uses.

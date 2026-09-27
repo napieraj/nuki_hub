@@ -303,10 +303,21 @@ void NukiWrapper::checkLockAction(const int64_t& ts)
     if(_nextLockAction != (NukiLock::LockAction)0xff)
     {
         int retryCount = 0;
+#ifdef NUKI_HUB_PROTECT_WEBHOOK
+        bool expired = false;
+#endif
 
         Nuki::CmdResult result = _nukiRetryHandler->retryComm([&]()
         {
              Nuki::CmdResult cmdResult;
+#ifdef NUKI_HUB_PROTECT_WEBHOOK
+             // Checked before the first attempt and before every retry.
+             if(expired || lockActionExpired(espMillis()))
+             {
+                 expired = true;
+                 return Nuki::CmdResult::Error;
+             }
+#endif
              cmdResult = _nukiLock.lockAction(_nextLockAction, 0, 0);
              char resultStr[15] = {0};
              NukiLock::cmdResultToString(cmdResult, resultStr);
@@ -324,6 +335,9 @@ void NukiWrapper::checkLockAction(const int64_t& ts)
 
             return cmdResult;
         });
+#ifdef NUKI_HUB_PROTECT_WEBHOOK
+        clearLockActionDeadline();
+#endif
 
         if(result == Nuki::CmdResult::Success)
         {
@@ -341,6 +355,15 @@ void NukiWrapper::checkLockAction(const int64_t& ts)
                 _nextLockStateUpdateTs = ts + 10 * 1000;
             }
         }
+#ifdef NUKI_HUB_PROTECT_WEBHOOK
+        else if(expired)
+        {
+            Log->println("Lock action expired");
+            _network->publishRetry("expired");
+            retryCount = 0;
+            _nextLockAction = (NukiLock::LockAction) 0xff;
+        }
+#endif
         else
         {
             Log->println("Lock: Maximum number of retries exceeded, aborting.");
@@ -1198,11 +1221,45 @@ LockActionResult NukiWrapper::onLockActionReceivedCallback(const char *value)
     return nukiInst->onLockActionReceived(value);
 }
 
-LockActionResult NukiWrapper::requestLockAction(const char *action)
+#ifdef NUKI_HUB_PROTECT_WEBHOOK
+LockActionResult NukiWrapper::requestLockAction(const char *action, int64_t deadlineTs)
 {
+    // Set the deadline before queuing so the first attempt already sees it.
+    // It belongs to this action only: if another path (MQTT, GPIO) replaces the
+    // queued action with a different one, the deadline no longer applies.
+    const NukiLock::LockAction deadlineFor = deadlineTs > 0 && action != nullptr ? NukiHelper::lockActionToEnum(action) : (NukiLock::LockAction)0xff;
+    taskENTER_CRITICAL(&_nextLockActionDeadlineMux);
+    _nextLockActionDeadlineTs = deadlineTs;
+    _nextLockActionDeadlineFor = deadlineFor;
+    taskEXIT_CRITICAL(&_nextLockActionDeadlineMux);
+
     // Same path (and ACL) as an MQTT lock action.
-    return onLockActionReceived(action);
+    LockActionResult result = onLockActionReceived(action);
+    if(result != LockActionResult::Success)
+    {
+        clearLockActionDeadline();
+    }
+    return result;
 }
+
+bool NukiWrapper::lockActionExpired(const int64_t& ts)
+{
+    taskENTER_CRITICAL(&_nextLockActionDeadlineMux);
+    const bool expired = _nextLockActionDeadlineTs > 0 &&
+                         _nextLockActionDeadlineFor == _nextLockAction &&
+                         ts > _nextLockActionDeadlineTs;
+    taskEXIT_CRITICAL(&_nextLockActionDeadlineMux);
+    return expired;
+}
+
+void NukiWrapper::clearLockActionDeadline()
+{
+    taskENTER_CRITICAL(&_nextLockActionDeadlineMux);
+    _nextLockActionDeadlineTs = 0;
+    _nextLockActionDeadlineFor = (NukiLock::LockAction)0xff;
+    taskEXIT_CRITICAL(&_nextLockActionDeadlineMux);
+}
+#endif
 
 LockActionResult NukiWrapper::onLockActionReceived(const char *value)
 {

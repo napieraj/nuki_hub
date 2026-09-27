@@ -11,6 +11,11 @@
 
 extern bool timeSynced;
 
+// Older local ProtectWebhookConfig.h files don't define it.
+#ifndef PROTECT_WEBHOOK_ACTION_DEADLINE_MS
+#define PROTECT_WEBHOOK_ACTION_DEADLINE_MS 8000
+#endif
+
 NukiWrapper* ProtectWebhook::_nuki = nullptr;
 
 namespace
@@ -238,7 +243,9 @@ esp_err_t ProtectWebhook::handle(PsychicRequest* request, PsychicResponse* resp)
             return reply(resp, 429, "cooldown");
         }
 
-        LockActionResult r = _nuki->requestLockAction(rule->action);
+        // Drop the action if the lock can't be reached in time: a press
+        // shouldn't unlock the door long after the user gave up.
+        LockActionResult r = _nuki->requestLockAction(rule->action, espMillis() + PROTECT_WEBHOOK_ACTION_DEADLINE_MS);
         Log->printf("Protect webhook: %s -> %s\n", rule->action,
                     r == LockActionResult::Success ? "queued" : "refused");
         switch(r)
