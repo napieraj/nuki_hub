@@ -63,7 +63,8 @@ One alarm per rule (e.g. "Fob A - Hold Right", "Fob A - Press Right"):
 - Custom Webhook: `http://<board-ip>/protect?r=<that rule's token>`, Method **POST**
 - Auth: **Bearer**, token = `PROTECT_WEBHOOK_SECRET`. This keeps the secret out
   of the URL; `&k=<secret>` in the URL also works.
-- Leave "Ignore repeated actions" **off**; the board has its own 10 s cooldown.
+- Leave "Ignore repeated actions" **off**; the board has its own 10 s cooldown per
+  rule (per alarm), so "hold to unlock" then "press to lock" works right away.
 - Don't attach the alarm to an arm profile, so it works armed or disarmed.
 
 ### 4. Network
@@ -120,6 +121,6 @@ would have to hold a Protect API key. The webhook keeps credentials off the lock
 | 403 | `no_match` | No rule matched (token/fob/key/button/gesture), or the event was stale |
 | 403 | `acl_denied` | Matched, but the action is disabled in Nuki Hub's ACL |
 | 413 | `bad_size` | Empty or > 4 KB body |
-| 429 | `cooldown` | Replayed event, or < 10 s since the last accepted event |
+| 429 | `cooldown` | Replayed event, or < 10 s since the last accepted event for the same rule |
 | 503 | `no_time` | Clock not synced yet (Protect retries twice) |
 | 503 | `busy` | Another lock action is still queued or being sent (Protect retries twice) |

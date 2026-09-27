@@ -24,7 +24,10 @@ namespace
     constexpr size_t kSeenEvents = 16;
     char seen[kSeenEvents][48] = {};
     size_t seenNext = 0;
-    int64_t lastAcceptedMs = -PROTECT_WEBHOOK_COOLDOWN_MS;
+    // Cooldown per rule (index into PROTECT_WEBHOOK_RULES), so "hold to unlock"
+    // followed by "press to lock" isn't blocked. 0 = never accepted.
+    constexpr size_t kRules = sizeof(PROTECT_WEBHOOK_RULES) / sizeof(PROTECT_WEBHOOK_RULES[0]);
+    int64_t lastAcceptedMs[kRules] = {};
     portMUX_TYPE lock = portMUX_INITIALIZER_UNLOCKED;
 
     esp_err_t reply(PsychicResponse* resp, int code, const char* result)
@@ -237,13 +240,15 @@ esp_err_t ProtectWebhook::handle(PsychicRequest* request, PsychicResponse* resp)
         }
 
         // 5. Replay + cooldown, then act.
+        const size_t ruleIndex = rule - PROTECT_WEBHOOK_RULES;
         bool proceed = false;
         taskENTER_CRITICAL(&lock);
         const int64_t m = espMillis();
-        if(!eventSeen(eventId) && m - lastAcceptedMs >= PROTECT_WEBHOOK_COOLDOWN_MS)
+        if(!eventSeen(eventId) &&
+           (lastAcceptedMs[ruleIndex] == 0 || m - lastAcceptedMs[ruleIndex] >= PROTECT_WEBHOOK_COOLDOWN_MS))
         {
             rememberEvent(eventId);
-            lastAcceptedMs = m;
+            lastAcceptedMs[ruleIndex] = m;
             proceed = true;
         }
         taskEXIT_CRITICAL(&lock);

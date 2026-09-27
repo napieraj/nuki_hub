@@ -67,7 +67,8 @@ static const ProtectRule PROTECT_WEBHOOK_RULES[] = {
 // Reject events whose Protect timestamp is further than this from our (NTP) clock.
 #define PROTECT_WEBHOOK_MAX_SKEW_MS 15000
 
-// Minimum time between two accepted actions.
+// Minimum time between two accepted events for the same rule. Different rules
+// (e.g. hold-to-unlock, then press-to-lock) have separate cooldowns.
 #define PROTECT_WEBHOOK_COOLDOWN_MS 10000
 
 // A queued action that hasn't been sent to the lock within this time (first
