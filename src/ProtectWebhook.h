@@ -6,7 +6,14 @@
 // fixed at build time in ProtectWebhookConfig.h (copy ProtectWebhookConfig.h.example),
 // so nothing about who may open the door can be changed over the network.
 //
-// Route:  POST /protect?k=<secret>   (body: Protect Alarm Manager JSON)
+// Route:  POST /protect?r=<rule token>   (body: Protect Alarm Manager JSON)
+// Auth:   "Authorization: Bearer <secret>" (Protect's Bearer option, preferred),
+//         or &k=<secret> in the URL. The source IP must be PROTECT_WEBHOOK_SOURCE_IP.
+// One Protect alarm per fob button + gesture, each with its own ?r= token; the
+// rule also checks key, fob MAC, button and gesture. Checks run in this order:
+// source IP, secret, size, clock, JSON, rule match, freshness, BLE alive, not
+// busy, replay, per-rule cooldown, then the action is queued (with a deadline)
+// through the same ACL as MQTT.
 
 #ifdef NUKI_HUB_PROTECT_WEBHOOK
 

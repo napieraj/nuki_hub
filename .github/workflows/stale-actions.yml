@@ -4,6 +4,8 @@ on:
   - cron: "30 7 * * *"
 jobs:
   stale:
+    # Upstream's issue policy; don't mark this fork's issues/PRs stale.
+    if: github.repository == 'technyon/nuki_hub'
     runs-on: ubuntu-latest
     steps:
     - uses: actions/stale@v9.0.0

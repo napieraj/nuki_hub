@@ -1,0 +1,68 @@
+name: Waveshare 8DI-8RO build
+on:
+  workflow_dispatch:
+  push:
+    branches: [waveshare-8di8ro]
+  pull_request:
+    branches: [waveshare-8di8ro]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build esp32-s3-waveshare-8di8ro
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: recursive
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          version: "latest"
+          enable-cache: false
+
+      - name: Install PlatformIO Core 6.1.19
+        run: |
+          uv pip install --system -U https://github.com/pioarduino/platformio-core/archive/refs/tags/v6.1.19.zip
+          # Same pins as upstream's build.yml (platform-espressif32 imports them unconditionally).
+          uv pip install --system -U "littlefs-python>=0.16.0" "fatfs-ng>=0.1.14" "pyyaml>=6.0.2" \
+            "rich-click>=1.8.6" "zopfli>=0.2.2" "intelhex>=2.3.0" "rich>=14.0.0" "urllib3<2" \
+            "cryptography>=45.0.3" "certifi>=2025.8.3" "ecdsa>=0.19.1" "bitstring>=4.3.1" \
+            "reedsolo>=1.5.3,<1.8" "esp-idf-size>=2.0.0" "esp-coredump>=1.14.0"
+
+      - name: Check Python scripts
+        run: python -m py_compile scripts/*.py
+
+      - name: Use the example webhook config
+        run: cp src/ProtectWebhookConfig.h.example src/ProtectWebhookConfig.h
+
+      - name: Build (example config, placeholders allowed)
+        env:
+          PLATFORMIO_BUILD_FLAGS: -DPROTECT_WEBHOOK_ALLOW_PLACEHOLDERS
+        run: |
+          set +e
+          pio run -e esp32-s3-waveshare-8di8ro 2>&1 | tee build.log
+          status=${PIPESTATUS[0]}
+          set -e
+          elf=.pio/build/esp32-s3-waveshare-8di8ro/firmware.elf
+          if [ "$status" -eq 0 ]; then
+            exit 0
+          fi
+          # Upstream's release packaging always fails afterwards because this fork
+          # doesn't build the updater (updater/release/esp32s3oct/updater.bin).
+          # The firmware itself is good if it linked and nothing else failed.
+          if [ -f "$elf" ] && grep -q "Total image size" build.log \
+             && grep -q "updater.bin: No such file or directory" build.log \
+             && ! grep -qE "(error:|Error [0-9]+$)" build.log; then
+            echo "::notice::firmware.elf built; ignoring the expected updater packaging error"
+            exit 0
+          fi
+          echo "::error::Build failed"
+          exit 1

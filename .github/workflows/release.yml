@@ -94,6 +94,8 @@ jobs:
   release:
     name: Release new version
     needs: build
+    # Publishes binaries/releases: upstream only, never from a fork.
+    if: github.repository == 'technyon/nuki_hub'
     runs-on: ubuntu-latest
     steps:
       - name: Git Checkout

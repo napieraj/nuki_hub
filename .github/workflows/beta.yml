@@ -82,6 +82,8 @@ jobs:
   ota-beta:
     name: Create beta from latest master
     needs: build
+    # Publishes binaries/releases: upstream only, never from a fork.
+    if: github.repository == 'technyon/nuki_hub'
     runs-on: ubuntu-latest
     steps:
       - name: Git Checkout
