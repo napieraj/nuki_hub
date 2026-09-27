@@ -374,6 +374,15 @@ const std::vector<int> Gpio::getDisabledPins() const
         break;
     }
 
+#ifdef NUKI_HUB_WAVESHARE_8DI8RO
+    // BOOT (0), WS2812 (38), I2C SCL/SDA to the relay driver and RTC (41, 42),
+    // buzzer on a strapping pin (46). DI1-8 (GPIO 4-11) stay available.
+    for(int pin : { 0, 38, 41, 42, 46 })
+    {
+        disabledPins.push_back(pin);
+    }
+#endif
+
     Log->print("GPIO Boot button and Ethernet disabled pins:");
     for_each_n(disabledPins.begin(), disabledPins.size(),
                [](int x)

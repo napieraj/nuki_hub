@@ -12,6 +12,12 @@ from a UniFi Protect Alarm Manager webhook. No Wi-Fi, no MQTT broker needed.
   bootloop reset cannot switch it to Wi-Fi. Wi-Fi fallback is disabled: if the
   W5500 fails the ESP reboots and retries. The `NukiHub` access point never opens.
 - The eight relays (TCA9554 @ 0x20, I2C SDA 42 / SCL 41) are forced off first thing in `setup()`.
+- GPIO 0 (BOOT), 38 (WS2812), 41/42 (I2C) and 46 (buzzer, strapping pin) can't be
+  given a GPIO role. The eight digital inputs DI1-8 are GPIO 4-11 (dry contact to
+  DGND, pulled up, active low). For a hardwired exit button, give its DI pin the
+  role **Input: Unlock** in Nuki Hub's GPIO configuration. GPIO actions bypass
+  Nuki Lock Access Control: anyone who can short that input to DGND can unlock,
+  so keep the button and its wiring on the secure side of the door.
 - BLE TX power defaults to +9 dBm when unset (upstream applies +3 dBm while its UI shows 9).
 - Logs and serial config import are on USB-C (`ARDUINO_USB_CDC_ON_BOOT=1`).
 - The module is a WROOM-1U: use the SMA antenna, outside any metal cabinet.
