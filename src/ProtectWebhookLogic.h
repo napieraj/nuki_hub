@@ -119,24 +119,59 @@ namespace ProtectWebhookLogic
         return buf;
     }
 
-    // Index of the first rule matching the ?r= token, trigger key, fob and
-    // fields, or -1. fieldEquals(fieldName, wanted) looks the field up in the
-    // trigger. Rule is any struct with the ProtectRule members.
+    // A rule field that is null or "" is not checked.
+    inline bool ruleFieldSet(const char* s)
+    {
+        return s != nullptr && s[0] != 0;
+    }
+
+    // Rules with an "enabled" member are skipped when it is false; rules
+    // without one (tests, the old compile-time struct) always take part.
+    template<typename Rule>
+    auto ruleEnabled(const Rule& r, int) -> decltype((bool)r.enabled)
+    {
+        return r.enabled;
+    }
+
+    template<typename Rule>
+    bool ruleEnabled(const Rule&, long)
+    {
+        return true;
+    }
+
+    // Does one rule match the ?r= token, trigger key, fob and fields?
+    // fieldEquals(fieldName, wanted) looks the field up in the trigger.
+    template<typename Rule, typename FieldEquals>
+    bool ruleMatches(const Rule& r, const char* token, const char* key, const char* device,
+                     FieldEquals& fieldEquals)
+    {
+        if(!ruleEnabled(r, 0)) return false;
+        if(ruleFieldSet(r.token) && !ctEquals(token, r.token)) return false;
+        if(ruleFieldSet(r.key) && strcmp(key, r.key) != 0) return false;
+        if(!ruleFieldSet(r.device) || !macMatches(device, r.device)) return false;
+        if(ruleFieldSet(r.value) && !fieldEquals(r.field, r.value)) return false;
+        if(ruleFieldSet(r.value2) && !fieldEquals(r.field2, r.value2)) return false;
+        return true;
+    }
+
+    // Index of the first matching rule, or -1. Rule is any struct with the
+    // ProtectRule members (optionally "enabled").
+    template<typename Rule, typename FieldEquals>
+    int findRule(const Rule* rules, size_t n, const char* token, const char* key, const char* device,
+                 FieldEquals fieldEquals)
+    {
+        for(size_t i = 0; i < n; i++)
+        {
+            if(ruleMatches(rules[i], token, key, device, fieldEquals)) return (int)i;
+        }
+        return -1;
+    }
+
     template<typename Rule, size_t N, typename FieldEquals>
     int findRule(const Rule (&rules)[N], const char* token, const char* key, const char* device,
                  FieldEquals fieldEquals)
     {
-        for(size_t i = 0; i < N; i++)
-        {
-            const Rule& r = rules[i];
-            if(r.token != nullptr && !ctEquals(token, r.token)) continue;
-            if(r.key != nullptr && strcmp(key, r.key) != 0) continue;
-            if(!macMatches(device, r.device)) continue;
-            if(r.value != nullptr && !fieldEquals(r.field, r.value)) continue;
-            if(r.value2 != nullptr && !fieldEquals(r.field2, r.value2)) continue;
-            return (int)i;
-        }
-        return -1;
+        return findRule(&rules[0], N, token, key, device, fieldEquals);
     }
 
     // Replay cache (last Seen event IDs, whatever rule) plus a cooldown per
@@ -161,6 +196,16 @@ namespace ProtectWebhookLogic
             _accepted[rule] = true;
             _lastAcceptedMs[rule] = nowMs;
             return true;
+        }
+
+        // Forget one rule's cooldown (its settings changed).
+        void resetRule(size_t rule)
+        {
+            if(rule < Rules)
+            {
+                _accepted[rule] = false;
+                _lastAcceptedMs[rule] = 0;
+            }
         }
 
     private:
