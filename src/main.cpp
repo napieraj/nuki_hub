@@ -906,7 +906,16 @@ void restartServices(bool reconnect)
 
 void initNetworkTask(const bool& connected, const bool& firstRun)
 {
+#ifdef NUKI_HUB_WAVESHARE_8DI8RO
+    // The W5500 gets its DHCP lease seconds after the network task starts, so
+    // the first pass is never connected and SNTP was never started. Run once,
+    // on the first connected pass instead.
+    static bool initDone = false;
+    if(!connected || initDone) return;
+    initDone = true;
+#else
     if(!connected || !firstRun) return;
+#endif
 
 #if !defined(NUKI_HUB_UPDATER) && (defined(CONFIG_ESP_HOSTED_ENABLE_BT_NIMBLE) || defined(CONFIG_ESP_WIFI_REMOTE_ENABLED))
     //if (hostedHasUpdate() || forceHostedUpdate)
