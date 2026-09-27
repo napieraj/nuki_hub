@@ -77,11 +77,18 @@ bool ProtectWebhook::macMatches(const char* a, const char* b)
     return true;
 }
 
-bool ProtectWebhook::userAllowed(const char* guid)
+bool ProtectWebhook::fieldEquals(JsonVariantConst v, const char* want)
 {
-    for(const char* allowed : PROTECT_WEBHOOK_USERS)
+    // Protect may send the discriminator as a string or a number.
+    if(v.is<const char*>())
     {
-        if(strcasecmp(guid, allowed) == 0) return true;
+        return strcasecmp(v.as<const char*>(), want) == 0;
+    }
+    if(v.is<long long>())
+    {
+        char buf[24];
+        snprintf(buf, sizeof(buf), "%lld", v.as<long long>());
+        return strcmp(buf, want) == 0;
     }
     return false;
 }
@@ -141,24 +148,25 @@ esp_err_t ProtectWebhook::handle(PsychicRequest* request, PsychicResponse* resp)
 
     const int64_t nowMs = (int64_t)time(nullptr) * 1000;
 
-    // 3. Find one trigger that satisfies every policy check.
+    // 3. Find one trigger that matches a rule (key + device + discriminator).
     for(JsonObjectConst t : triggers)
     {
         const char* key = t["key"] | "";
         const char* device = t["device"] | "";
-        const char* value = t["value"] | "";
         const char* eventId = t["eventId"] | "";
         const int64_t ts = t["timestamp"] | (int64_t)0;
 
-        bool keyOk = false;
-        for(const char* k : PROTECT_WEBHOOK_KEYS)
+        const ProtectRule* rule = nullptr;
+        for(const ProtectRule& r : PROTECT_WEBHOOK_RULES)
         {
-            if(strcmp(key, k) == 0) keyOk = true;
+            if(strcmp(key, r.key) != 0 || !macMatches(device, r.device)) continue;
+            if(r.value != nullptr && !fieldEquals(t[r.field], r.value)) continue;
+            rule = &r;
+            break;
         }
-        if(!keyOk || !macMatches(device, PROTECT_WEBHOOK_DEVICE_MAC)) continue;
-        if(!userAllowed(value))
+        if(rule == nullptr)
         {
-            Log->printf("Protect webhook: user not allowed (%s)\n", key);
+            Log->printf("Protect webhook: no rule for key '%s'\n", key);
             continue;
         }
         if(ts == 0 || llabs(nowMs - ts) > PROTECT_WEBHOOK_MAX_SKEW_MS)
@@ -185,8 +193,8 @@ esp_err_t ProtectWebhook::handle(PsychicRequest* request, PsychicResponse* resp)
             return reply(resp, 429, "cooldown");
         }
 
-        LockActionResult r = _nuki->requestLockAction(PROTECT_WEBHOOK_ACTION);
-        Log->printf("Protect webhook: %s -> %s\n", PROTECT_WEBHOOK_ACTION,
+        LockActionResult r = _nuki->requestLockAction(rule->action);
+        Log->printf("Protect webhook: %s -> %s\n", rule->action,
                     r == LockActionResult::Success ? "queued" : "refused");
         switch(r)
         {

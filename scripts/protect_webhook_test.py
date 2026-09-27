@@ -20,8 +20,11 @@ IP set to your laptop (or "" to disable the check). Never ship the latter.
 Examples:
   ./protect_webhook_test.py listen --port 8099
   ./protect_webhook_test.py suite --url http://192.0.2.20/protect \\
-      --secret "$SECRET" --mac AA:BB:CC:DD:EE:FF \\
-      --user 00000000-0000-0000-0000-000000000001
+      --secret "$SECRET" --key <captured-key> --device AA:BB:CC:DD:EE:01 \\
+      --field value --value <captured-button-id>
+
+Use the key/device/field/value from a real capture ("listen"); they must match
+a rule in ProtectWebhookConfig.h.
 """
 
 import argparse
@@ -35,21 +38,27 @@ import urllib.request
 import uuid
 
 
-def build_event(mac, user, key="nfc_registered", ts_ms=None, event_id=None):
-    """Mirror the shape UniFi Protect Alarm Manager sends for an NFC scan."""
+def build_event(key, device, field, value, ts_ms=None, event_id=None):
+    """Mirror the Alarm Manager envelope around one trigger.
+
+    The envelope (alarm.triggers[].{key, device, eventId, timestamp}) is
+    documented; how a SuperLink button is identified inside the trigger is not,
+    so `field`/`value` come from a real capture.
+    """
     now = int(time.time() * 1000) if ts_ms is None else ts_ms
+    trigger = {
+        "key": key,
+        "device": device,
+        "eventId": event_id or uuid.uuid4().hex[:24],
+        "timestamp": now,
+    }
+    trigger[field] = value
     return {
         "alarm": {
-            "name": "Bench NFC test",
-            "sources": [{"device": mac, "type": "include"}],
+            "name": "Bench fob test",
+            "sources": [{"device": device, "type": "include"}],
             "conditions": [{"condition": {"type": "is", "source": key}}],
-            "triggers": [{
-                "key": key,
-                "device": mac,
-                "value": user,
-                "eventId": event_id or uuid.uuid4().hex[:24],
-                "timestamp": now,
-            }],
+            "triggers": [trigger],
         },
         "timestamp": now + 25,
     }
@@ -99,33 +108,36 @@ def cmd_listen(args):
 
 
 def cmd_send(args):
-    status, body = post(args.url, args.secret, build_event(args.mac, args.user, key=args.key))
+    status, body = post(args.url, args.secret,
+                        build_event(args.key, args.device, args.field, args.value))
     print(status, body)
     return 0 if status in (200, 403) else 1
 
 
 def cmd_suite(args):
-    mac, user, url, secret = args.mac, args.user, args.url, args.secret
+    url, secret = args.url, args.secret
+    k, d, f, v = args.key, args.device, args.field, args.value
+    ev = lambda **kw: build_event(kw.pop("key", k), kw.pop("device", d), f, kw.pop("value", v), **kw)
     now = lambda: int(time.time() * 1000)
     valid_id = uuid.uuid4().hex[:24]
 
     # (name, secret, body, expected status, expected result)
     cases = [
-        ("wrong secret",      "x" * len(secret), build_event(mac, user), 403, "denied"),
+        ("wrong secret",      "x" * len(secret), ev(), 403, "denied"),
         ("malformed JSON",    secret, b"{not json", 400, "bad_json"),
         ("no triggers",       secret, {"alarm": {}}, 400, "no_triggers"),
         ("oversized body",    secret, b"{" + b" " * 5000 + b"}", 413, "bad_size"),
-        ("unknown user",      secret, build_event(mac, "11111111-2222-3333-4444-555555555555"), 403, "no_match"),
-        ("other reader MAC",  secret, build_event("00:11:22:33:44:55", user), 403, "no_match"),
-        ("wrong trigger key", secret, build_event(mac, user, key="fingerprint_identified"), 403, "no_match"),
-        ("stale (-60 s)",     secret, build_event(mac, user, ts_ms=now() - 60_000), 403, "no_match"),
-        ("future (+60 s)",    secret, build_event(mac, user, ts_ms=now() + 60_000), 403, "no_match"),
-        # Everything valid. With Unlock disabled in the ACL this is acl_denied;
-        # with Unlock enabled it is ack and THE LOCK WILL MOVE.
-        ("valid event",       secret, build_event(mac, user, event_id=valid_id), 403 if not args.live else 200,
-                                                                   "acl_denied" if not args.live else "ack"),
-        ("replay same event", secret, build_event(mac, user, event_id=valid_id), 429, "cooldown"),
-        ("new event < 10 s",  secret, build_event(mac, user), 429, "cooldown"),
+        ("other fob",         secret, ev(device="00:11:22:33:44:55"), 403, "no_match"),
+        ("other button",      secret, ev(value="not-a-configured-button"), 403, "no_match"),
+        ("wrong trigger key", secret, ev(key="motion"), 403, "no_match"),
+        ("stale (-60 s)",     secret, ev(ts_ms=now() - 60_000), 403, "no_match"),
+        ("future (+60 s)",    secret, ev(ts_ms=now() + 60_000), 403, "no_match"),
+        # Everything valid. With the rule's action disabled in the ACL this is
+        # acl_denied; with it enabled it is ack and THE LOCK WILL MOVE.
+        ("valid press",       secret, ev(event_id=valid_id), 200 if args.live else 403,
+                                                             "ack" if args.live else "acl_denied"),
+        ("replay same press", secret, ev(event_id=valid_id), 429, "cooldown"),
+        ("new press < 10 s",  secret, ev(), 429, "cooldown"),
     ]
 
     if args.live:
@@ -162,11 +174,11 @@ def main():
         s = sub.add_parser(name)
         s.add_argument("--url", required=True, help="http://<board>/protect")
         s.add_argument("--secret", required=True)
-        s.add_argument("--mac", required=True, help="reader MAC configured on the board")
-        s.add_argument("--user", required=True, help="allowed Protect user GUID")
-        if name == "send":
-            s.add_argument("--key", default="nfc_registered")
-        else:
+        s.add_argument("--key", required=True, help="trigger key from the capture")
+        s.add_argument("--device", required=True, help="fob MAC/ID as Protect sends it")
+        s.add_argument("--field", default="value", help="trigger field naming the button")
+        s.add_argument("--value", required=True, help="button id from the capture")
+        if name == "suite":
             s.add_argument("--live", action="store_true",
                            help="expect 200 ack for the valid case (lock moves)")
         s.set_defaults(func=func)

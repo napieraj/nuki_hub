@@ -21,7 +21,7 @@ from a UniFi Protect Alarm Manager webhook. No Wi-Fi, no MQTT broker needed.
   A webhook handler only queues the action; the nuki task on core 0 performs
   it over BLE. The W5500 driver's RX task is created by ESP-IDF without an
   affinity and may run on either core.
-- `NUKI_HUB_PROTECT_WEBHOOK` is on: configure `src/ProtectWebhookConfig.h`. Protect setup and bench test: see `PROTECT_SETUP.md`
+- `NUKI_HUB_PROTECT_WEBHOOK` is on: configure `src/ProtectWebhookConfig.h`. KeyFob + Protect setup and bench test: see `PROTECT_SETUP.md`
   (copy the `.example`).
 
 ### First boot

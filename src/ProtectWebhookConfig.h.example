@@ -1,29 +1,42 @@
 #pragma once
 // Copy to ProtectWebhookConfig.h (git-ignored) and fill in. Build with
 // -DNUKI_HUB_PROTECT_WEBHOOK. All values below are placeholders.
+//
+// Written for UniFi SuperLink KeyFobs (USL-FOB) via Alarm Manager
+// "Activity -> Button". Protect does not document what a button event looks
+// like in the webhook body, so CAPTURE ONE REAL PRESS FIRST
+// (scripts/protect_webhook_test.py listen) and copy key/device/field/value
+// from it. Until a rule matches, every event is rejected (403 no_match).
 
 // Long random secret, passed as ?k=... in the Protect "Delivery URL".
 // Generate with: openssl rand -hex 32
 #define PROTECT_WEBHOOK_SECRET "replace-with-64-hex-chars"
 
-// Only accept requests from the Protect console (NVR / UNVR / CK) IP. "" disables the check.
+// Only accept requests from the Protect console (UniFi OS) IP. "" disables the check.
 #define PROTECT_WEBHOOK_SOURCE_IP "192.0.2.10"
 
-// MAC of the reader (doorbell / G4 Pro / G6 Entry). Any separator/case is fine.
-#define PROTECT_WEBHOOK_DEVICE_MAC "AA:BB:CC:DD:EE:FF"
-
-// Trigger keys that may unlock. Protect sends the *user GUID* in "value" for
-// registered NFC cards and identified fingerprints.
-static const char* const PROTECT_WEBHOOK_KEYS[] = { "nfc_registered" };
-
-// Protect user GUIDs allowed to unlock (Admins & Users -> user -> ID).
-static const char* const PROTECT_WEBHOOK_USERS[] = {
-    "00000000-0000-0000-0000-000000000001",
+// One rule per fob button that may act on the lock.
+//   key     triggers[].key of the button event          (from the capture)
+//   device  triggers[].device, i.e. the fob's MAC/ID     (separators and case ignored)
+//   field   trigger field naming the button, e.g. "value" (from the capture)
+//   value   expected content of that field; nullptr = any button on this fob (avoid)
+//   action  Nuki Hub lock action: "unlock", "unlatch", "lock", "lockngo", ...
+//           still subject to Nuki Hub's "Nuki Lock Access Control" ACL
+struct ProtectRule
+{
+    const char* key;
+    const char* device;
+    const char* field;
+    const char* value;
+    const char* action;
 };
 
-// Nuki Hub lock action to run: "unlock", "unlatch", "lockngo", ...
-// Still subject to Nuki Hub's own "Nuki Lock Access Control" ACL.
-#define PROTECT_WEBHOOK_ACTION "unlock"
+static const ProtectRule PROTECT_WEBHOOK_RULES[] = {
+    // Fob A, side button 1 -> unlock
+    { "REPLACE_captured_key", "AA:BB:CC:DD:EE:01", "value", "REPLACE_captured_button_1", "unlock" },
+    // Fob A, side button 2 -> lock
+    { "REPLACE_captured_key", "AA:BB:CC:DD:EE:01", "value", "REPLACE_captured_button_2", "lock" },
+};
 
 // Reject events whose Protect timestamp is further than this from our (NTP) clock.
 #define PROTECT_WEBHOOK_MAX_SKEW_MS 15000
