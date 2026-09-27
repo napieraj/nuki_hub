@@ -13,6 +13,11 @@ from a UniFi Protect Alarm Manager webhook. No Wi-Fi, no MQTT broker needed.
   reset pulse. `-DWAVESHARE_ETH_IRQ=-1` switches the W5500 to 10 ms polling. Web UI changes and the
   bootloop reset cannot switch it to Wi-Fi. Wi-Fi fallback is disabled: if the
   W5500 fails the ESP reboots and retries. The `NukiHub` access point never opens.
+- Wi-Fi is compiled out (`-DNUKI_HUB_NO_WIFI`): the Wi-Fi driver is not linked
+  and can't start, so the antenna serves BLE only. Wi-Fi/BT software coexistence
+  is off (`sdkconfig.defaults.waveshare-8di8ro`). The web UI has no Wi-Fi pages,
+  RSSI field or "Also reset WiFi settings" box. Saves about 285 KiB flash and
+  14 KiB internal RAM. The flag is refused in builds without this board's flag.
 - The WS2812 (GPIO 38) flashes after each authenticated webhook call: short
   **green** = action queued, **red** = no rule matched (or stale) or refused by the
   ACL. Busy, cooldown and replays don't flash. If the colours are swapped, build
