@@ -111,6 +111,23 @@ void WaveshareBoard::applyDefaults(Preferences* preferences)
         preferences->putString(preference_ota_main_url, "");
     }
 
+#ifdef NUKI_HUB_PROTECT_WEBHOOK
+    // The webhook lives on the web server, and nothing may switch the network
+    // (and so the webhook) off by accident. Enforced on every boot.
+    if(!preferences->getBool(preference_webserver_enabled, true))
+    {
+        preferences->putBool(preference_webserver_enabled, true);
+    }
+    if(preferences->getBool(preference_disable_network_not_connected, false))
+    {
+        preferences->putBool(preference_disable_network_not_connected, false);
+    }
+    if(preferences->getBool(preference_restart_on_disconnect, false))
+    {
+        preferences->putBool(preference_restart_on_disconnect, false);
+    }
+
+#endif
     // Upstream reads an unset TX power as 0 and applies +3 dBm, while its web UI
     // shows 9 on S3, so re-saving "9" is a no-op. Make the default explicit.
     if(!preferences->isKey(preference_ble_tx_power))
