@@ -152,7 +152,8 @@ the page shows a red warning if the web UI has no password).
    "Fob A - Press Right": the same with its own token, value 2 `press`, action
    **Lock: lock**. Hold (3 s) to unlock is hard to trigger by accident in a
    pocket. `unlatch` also works; it is never retried after a timeout, so it
-   can't open the door twice.
+   can't open the door twice. `lock` isn't either, so a retry can't hit the
+   bolt while it's still moving.
 4. Tick **Webhook enabled** and **Save**. The page checks everything (secret
    ≥ 32 characters, tokens ≥ 16, a MAC and an action per rule, …) and says what
    to fix; nothing is stored until it passes. Changes apply at once.

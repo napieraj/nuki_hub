@@ -46,6 +46,12 @@ from a UniFi Protect Alarm Manager webhook. No Wi-Fi, no MQTT broker needed.
   role **Input: Unlock** in Nuki Hub's GPIO configuration. GPIO actions bypass
   Nuki Lock Access Control: anyone who can short that input to DGND can unlock,
   so keep the button and its wiring on the secure side of the door.
+- Lock, LockNgo, FullLock, Unlatch, LockNgoUnlatch and fob actions are sent once
+  (webhook, GPIO inputs, MQTT alike): after a timeout or other ambiguous result
+  the lock may already be running them, so they are not retried (a lock retry
+  into a moving bolt can raise a "motor jam" notification). Log:
+  `Lock: result ambiguous (TIMEOUT), not retrying`. Unlock is still retried.
+  Details: `PROTECT_SETUP.md` section 4.
 - BLE TX power defaults to +9 dBm when unset (upstream applies +3 dBm while its UI shows 9).
 - Logs and serial config import are on USB-C (`ARDUINO_USB_CDC_ON_BOOT=1`).
 - The module is a WROOM-1U: use the SMA antenna, outside any metal cabinet.
