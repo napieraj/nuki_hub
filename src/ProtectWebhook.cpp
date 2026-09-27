@@ -1,7 +1,7 @@
 #ifdef NUKI_HUB_PROTECT_WEBHOOK
 
 #include "ProtectWebhook.h"
-#include "ProtectWebhookConfig.h"
+#include "ForkSettings.h"
 #include "ProtectWebhookLogic.h"
 #include "NukiWrapper.h"
 #include "LockActionResult.h"
@@ -17,106 +17,57 @@
 
 extern bool timeSynced;
 
-// Older local ProtectWebhookConfig.h files don't define it.
-#ifndef PROTECT_WEBHOOK_ACTION_DEADLINE_MS
-#define PROTECT_WEBHOOK_ACTION_DEADLINE_MS 8000
-#endif
-#ifndef PROTECT_WEBHOOK_RELAY_PULSE_MS
-#define PROTECT_WEBHOOK_RELAY_PULSE_MS 3000
-#endif
-#ifndef PROTECT_WEBHOOK_BLE_STALL_MS
-#define PROTECT_WEBHOOK_BLE_STALL_MS 30000
-#endif
-
-// Build-time checks of ProtectWebhookConfig.h. The rules must be
-// "static constexpr" for these to see them.
-namespace ProtectWebhookCheck
-{
-    constexpr size_t len(const char* s)
-    {
-        size_t n = 0;
-        while(s[n] != 0) n++;
-        return n;
-    }
-
-    constexpr bool set(const char* s)
-    {
-        return s != nullptr && s[0] != 0;
-    }
-
-    constexpr bool isPlaceholder(const char* s)
-    {
-        const char* p = "replace";
-        if(s == nullptr) return false;
-        for(size_t i = 0; p[i] != 0; i++)
-        {
-            if(s[i] != p[i]) return false;
-        }
-        return true;
-    }
-
-    template<typename F> constexpr bool allRules(F f)
-    {
-        for(const ProtectRule& r : PROTECT_WEBHOOK_RULES)
-        {
-            if(!f(r)) return false;
-        }
-        return true;
-    }
-}
-
-static_assert(ProtectWebhookCheck::len(PROTECT_WEBHOOK_SECRET) >= 32,
-              "PROTECT_WEBHOOK_SECRET must be at least 32 characters (openssl rand -hex 32)");
-static_assert(ProtectWebhookCheck::allRules([](const ProtectRule& r) { return ProtectWebhookCheck::set(r.device); }),
-              "every Protect rule needs a device (the fob's MAC)");
-static_assert(ProtectWebhookCheck::allRules([](const ProtectRule& r) { return ProtectWebhookCheck::set(r.action); }),
-              "every Protect rule needs an action");
-static_assert(ProtectWebhookCheck::allRules([](const ProtectRule& r) { return r.value == nullptr || ProtectWebhookCheck::set(r.field); }),
-              "a Protect rule with 'value' needs 'field'");
-static_assert(ProtectWebhookCheck::allRules([](const ProtectRule& r) { return r.value2 == nullptr || ProtectWebhookCheck::set(r.field2); }),
-              "a Protect rule with 'value2' needs 'field2'");
-static_assert(ProtectWebhookCheck::allRules([](const ProtectRule& r) { return r.token == nullptr || ProtectWebhookCheck::len(r.token) >= 16; }),
-              "Protect rule tokens must be at least 16 characters (openssl rand -hex 16)");
-// A relay closed for minutes (typo, wrong unit) would hold a door open.
-static_assert(PROTECT_WEBHOOK_RELAY_PULSE_MS >= 100 && PROTECT_WEBHOOK_RELAY_PULSE_MS <= 30000,
-              "PROTECT_WEBHOOK_RELAY_PULSE_MS must be 100..30000 (milliseconds)");
-#ifndef PROTECT_WEBHOOK_ALLOW_BROAD_RULES
-static_assert(ProtectWebhookCheck::allRules([](const ProtectRule& r) { return r.token != nullptr || (ProtectWebhookCheck::set(r.key) && r.value != nullptr); }),
-              "a Protect rule without a token needs key + value, or it matches ANY event from that fob "
-              "(define PROTECT_WEBHOOK_ALLOW_BROAD_RULES to allow that)");
-#endif
-#ifndef PROTECT_WEBHOOK_ALLOW_PLACEHOLDERS
-static_assert(!ProtectWebhookCheck::isPlaceholder(PROTECT_WEBHOOK_SECRET),
-              "PROTECT_WEBHOOK_SECRET is still the placeholder from the example");
-static_assert(ProtectWebhookCheck::allRules([](const ProtectRule& r) { return !ProtectWebhookCheck::isPlaceholder(r.token); }),
-              "a Protect rule token is still the placeholder from the example");
-#endif
-
 NukiWrapper* ProtectWebhook::_nuki = nullptr;
 
 namespace
 {
     using namespace ProtectWebhookLogic;
+    using ForkSettingsLogic::MAX_RULES;
 
     constexpr size_t kMaxBody = 4096;
-    // Replay cache for the last 16 event IDs, plus a cooldown per rule (index
-    // into PROTECT_WEBHOOK_RULES), so "hold to unlock" followed by "press to
-    // lock" isn't blocked. Guarded by `lock`.
-    constexpr size_t kRules = sizeof(PROTECT_WEBHOOK_RULES) / sizeof(PROTECT_WEBHOOK_RULES[0]);
-    ReplayGuard<kRules> replayGuard;
+    // Replay cache for the last 16 event IDs, plus a cooldown per rule slot,
+    // so "hold to unlock" followed by "press to lock" isn't blocked. Guarded
+    // by `lock`.
+    ReplayGuard<MAX_RULES> replayGuard;
     portMUX_TYPE lock = portMUX_INITIALIZER_UNLOCKED;
 
     // Last BLE heartbeat (espMillis), 0 = nuki task not running yet.
     int64_t bleHeartbeatTs = 0;
     portMUX_TYPE bleHeartbeatMux = portMUX_INITIALIZER_UNLOCKED;
 
-    // PROTECT_WEBHOOK_SOURCE_IP in network byte order; 0 = check disabled.
-    uint32_t allowedSourceIp = 0;
+    // Recent results for the settings page. Guarded by resultMux.
+    ProtectWebhook::Result results[ProtectWebhook::RESULT_LOG_SIZE];
+    size_t resultNext = 0;
+    size_t resultStored = 0;
+    portMUX_TYPE resultMux = portMUX_INITIALIZER_UNLOCKED;
 
-    // Accept the peer only if it is exactly allowedSourceIp: plain IPv4, or
-    // IPv6 when IPv4-mapped (::ffff:a.b.c.d). Any other IPv6 peer is refused
-    // (PsychicClient::remoteIP() would compare only its low 32 bits).
-    bool sourceIpAllowed(int sock)
+    void recordResult(int code, const char* result, int rule, const char* action)
+    {
+        ProtectWebhook::Result r = {};
+        const time_t now = time(nullptr);
+        r.epoch = timeSynced ? (int64_t)now : 0;
+        r.uptimeMs = espMillis();
+        r.code = (uint16_t)code;
+        r.result = result;
+        r.rule = (int8_t)rule;
+        if(action != nullptr)
+        {
+            strlcpy(r.action, action, sizeof(r.action));
+        }
+        taskENTER_CRITICAL(&resultMux);
+        results[resultNext] = r;
+        resultNext = (resultNext + 1) % ProtectWebhook::RESULT_LOG_SIZE;
+        if(resultStored < ProtectWebhook::RESULT_LOG_SIZE)
+        {
+            resultStored++;
+        }
+        taskEXIT_CRITICAL(&resultMux);
+    }
+
+    // Accept the peer only if it is exactly the allowed IPv4 address: plain
+    // IPv4, or IPv6 when IPv4-mapped (::ffff:a.b.c.d). Any other IPv6 peer is
+    // refused (PsychicClient::remoteIP() would compare only its low 32 bits).
+    bool sourceIpAllowed(int sock, uint32_t allowedSourceIp)
     {
         struct sockaddr_storage peer;
         socklen_t peerLen = sizeof(peer);
@@ -145,7 +96,7 @@ namespace
         {
             return false;
         }
-        return ip == allowedSourceIp;
+        return allowedSourceIp != 0 && ip == allowedSourceIp;
     }
 
     // Visible feedback after authentication (never before, so an
@@ -159,7 +110,7 @@ namespace
 #endif
     }
 
-    esp_err_t reply(PsychicResponse* resp, int code, const char* result)
+    esp_err_t send(PsychicResponse* resp, int code, const char* result)
     {
         char buf[64];
         snprintf(buf, sizeof(buf), "{\"result\":\"%s\"}", result);
@@ -169,52 +120,13 @@ namespace
 
 void ProtectWebhook::registerRoute(PsychicHttpServer* server, NukiWrapper* nuki)
 {
-    if(nuki == nullptr)
-    {
-        return;
-    }
-    // Fail closed: one rule with an unknown action disables the whole route.
-    bool configValid = true;
-    for(const ProtectRule& r : PROTECT_WEBHOOK_RULES)
-    {
-        if(relayChannel(r.action) > 0)
-        {
-#ifndef NUKI_HUB_WAVESHARE_8DI8RO
-            Log->printf("Protect webhook: action '%s' needs the Waveshare 8DI-8RO build\n", r.action);
-            configValid = false;
-#endif
-        }
-        else if((int)NukiHelper::lockActionToEnum(r.action) == 0xff)
-        {
-            Log->printf("Protect webhook: unknown action '%s' in ProtectWebhookConfig.h\n", r.action);
-            configValid = false;
-        }
-    }
-    if(strlen(PROTECT_WEBHOOK_SOURCE_IP) > 0)
-    {
-        struct in_addr parsed;
-        if(inet_pton(AF_INET, PROTECT_WEBHOOK_SOURCE_IP, &parsed) != 1 || parsed.s_addr == 0)
-        {
-            Log->printf("Protect webhook: invalid PROTECT_WEBHOOK_SOURCE_IP '%s'\n", PROTECT_WEBHOOK_SOURCE_IP);
-            configValid = false;
-        }
-        else
-        {
-            allowedSourceIp = parsed.s_addr;
-        }
-    }
-    if(!configValid)
-    {
-        Log->println("Protect webhook disabled: fix ProtectWebhookConfig.h");
-        return;
-    }
-
+    // Always registered: whether requests are processed is decided per
+    // request from the settings, which can change at runtime.
     _nuki = nuki;
     server->on("/protect", HTTP_POST, [](PsychicRequest* request, PsychicResponse* resp)
     {
         return handle(request, resp);
     });
-    Log->println("Protect webhook enabled on POST /protect");
 }
 
 void ProtectWebhook::bleHeartbeat()
@@ -225,11 +137,43 @@ void ProtectWebhook::bleHeartbeat()
     taskEXIT_CRITICAL(&bleHeartbeatMux);
 }
 
-bool ProtectWebhook::secretMatches(const String& provided)
+int64_t ProtectWebhook::bleHeartbeatAgeMs()
 {
-    const char* expected = PROTECT_WEBHOOK_SECRET;
+    taskENTER_CRITICAL(&bleHeartbeatMux);
+    const int64_t heartbeat = bleHeartbeatTs;
+    taskEXIT_CRITICAL(&bleHeartbeatMux);
+    return heartbeat == 0 ? -1 : espMillis() - heartbeat;
+}
+
+void ProtectWebhook::onRulesChanged(const bool* changed, size_t count)
+{
+    taskENTER_CRITICAL(&lock);
+    for(size_t i = 0; i < count; i++)
+    {
+        if(changed[i])
+        {
+            replayGuard.resetRule(i);
+        }
+    }
+    taskEXIT_CRITICAL(&lock);
+}
+
+size_t ProtectWebhook::recentResults(Result* out, size_t max)
+{
+    taskENTER_CRITICAL(&resultMux);
+    size_t n = 0;
+    for(; n < resultStored && n < max; n++)
+    {
+        out[n] = results[(resultNext + RESULT_LOG_SIZE - 1 - n) % RESULT_LOG_SIZE];
+    }
+    taskEXIT_CRITICAL(&resultMux);
+    return n;
+}
+
+bool ProtectWebhook::secretMatches(const String& provided, const char* expected)
+{
     const size_t n = strlen(expected);
-    if(n < 32 || provided.length() != n)
+    if(n < ForkSettingsLogic::LEN_SECRET_MIN || provided.length() != n)
     {
         return false;
     }
@@ -276,17 +220,50 @@ bool ProtectWebhook::fieldEquals(JsonVariantConst v, const char* want)
 
 esp_err_t ProtectWebhook::handle(PsychicRequest* request, PsychicResponse* resp)
 {
-    // 1. Transport checks: source IP, secret, size.
-    if(strlen(PROTECT_WEBHOOK_SOURCE_IP) > 0 && !sourceIpAllowed(request->client()->socket()))
+    int ruleIndex = -1;
+    const char* ruleAction = nullptr;
+    auto reply = [&](int code, const char* result)
     {
-        Log->println("Protect webhook: rejected source IP");
-        return reply(resp, 403, "denied");
+        recordResult(code, result, ruleIndex, ruleAction);
+        return send(resp, code, result);
+    };
+
+    // The settings can't change while this request runs (a save waits), and
+    // it never sees a half-written rule table.
+    ForkSettings::ReadLock cfg(pdMS_TO_TICKS(2000));
+    if(!cfg.locked())
+    {
+        return reply(503, "busy");
     }
-    // Secret: "?k=<secret>" in the Delivery URL, or Protect's Bearer auth option
-    // ("Authorization: Bearer <secret>"), which keeps it out of URLs and logs.
+    if(!cfg.active())
+    {
+        Log->println("Protect webhook: disabled (see the Protect Webhook & Relays page)");
+        return reply(403, "disabled");
+    }
+    const ForkSettings::Settings& s = cfg.settings();
+
+    // 1. Transport checks: source IP, secret, size.
+    if(s.sourceIp[0] != 0)
+    {
+        struct in_addr parsed = {};
+        const bool parsedOk = inet_pton(AF_INET, s.sourceIp, &parsed) == 1;
+        if(!parsedOk || !sourceIpAllowed(request->client()->socket(), parsed.s_addr))
+        {
+            Log->println("Protect webhook: rejected source IP");
+            return reply(403, "denied");
+        }
+    }
+    // Secret: Protect's Bearer auth option ("Authorization: Bearer <secret>"),
+    // which keeps it out of URLs and logs, or "?k=<secret>" in the Delivery URL
+    // unless "Bearer only" is set.
     String provided;
     if(request->hasParam("k"))
     {
+        if(s.bearerOnly)
+        {
+            Log->println("Protect webhook: secret in the URL refused (Bearer only)");
+            return reply(403, "denied");
+        }
         provided = request->getParam("k")->value();
     }
     else if(request->hasHeader("Authorization"))
@@ -298,33 +275,33 @@ esp_err_t ProtectWebhook::handle(PsychicRequest* request, PsychicResponse* resp)
             provided.trim();
         }
     }
-    if(provided.length() == 0 || !secretMatches(provided))
+    if(provided.length() == 0 || !secretMatches(provided, s.secret))
     {
         Log->println("Protect webhook: bad secret");
-        return reply(resp, 403, "denied");
+        return reply(403, "denied");
     }
     if(request->contentLength() == 0 || request->contentLength() > kMaxBody)
     {
-        return reply(resp, 413, "bad_size");
+        return reply(413, "bad_size");
     }
 
     // 2. Freshness needs a real clock.
     if(!timeSynced)
     {
         Log->println("Protect webhook: time not synced, refusing");
-        return reply(resp, 503, "no_time");
+        return reply(503, "no_time");
     }
 
     JsonDocument doc;
     if(deserializeJson(doc, request->body()))
     {
-        return reply(resp, 400, "bad_json");
+        return reply(400, "bad_json");
     }
 
     JsonArrayConst triggers = doc["alarm"]["triggers"].as<JsonArrayConst>();
     if(triggers.isNull())
     {
-        return reply(resp, 400, "no_triggers");
+        return reply(400, "no_triggers");
     }
 
     const int64_t nowMs = (int64_t)time(nullptr) * 1000;
@@ -337,7 +314,7 @@ esp_err_t ProtectWebhook::handle(PsychicRequest* request, PsychicResponse* resp)
     // to the envelope timestamp.
     const int64_t envelopeTs = normalizeTimestampMs(doc["timestamp"] | (int64_t)0);
 
-    // 3. Find one trigger that matches a rule (key + device + discriminator).
+    // 3. Find one trigger that matches an enabled rule (key + device + discriminator).
     for(JsonObjectConst t : triggers)
     {
         const char* key = t["key"] | "";
@@ -348,12 +325,12 @@ esp_err_t ProtectWebhook::handle(PsychicRequest* request, PsychicResponse* resp)
         char synthId[64];
         const char* eventId = eventIdOrSynth(t["eventId"] | "", ts, key, device, synthId, sizeof(synthId));
 
-        const int ruleIndex = findRule(PROTECT_WEBHOOK_RULES, ruleToken.c_str(), key, device,
-                                       [&t](const char* field, const char* want)
+        const int matched = findRule(s.rules, MAX_RULES, ruleToken.c_str(), key, device,
+                                     [&t](const char* field, const char* want)
         {
             return fieldEquals(t[field], want);
         });
-        if(ruleIndex < 0)
+        if(matched < 0)
         {
             // Authenticated but unmatched: log what arrived (never the secret
             // or token) so a changed Protect payload is easy to spot.
@@ -363,34 +340,43 @@ esp_err_t ProtectWebhook::handle(PsychicRequest* request, PsychicResponse* resp)
                         key, device, button ? button : "", value ? value : "");
             continue;
         }
-        const ProtectRule* rule = &PROTECT_WEBHOOK_RULES[ruleIndex];
-        if(!isFresh(nowMs, ts, PROTECT_WEBHOOK_MAX_SKEW_MS))
+        const ForkSettings::Rule* rule = &s.rules[matched];
+        if(!isFresh(nowMs, ts, s.maxSkewMs))
         {
             Log->printf("Protect webhook: stale event, skew %lld ms\n", (long long)(nowMs - ts));
             continue;
         }
+        ruleIndex = matched;
+        ruleAction = rule->action;
         // Relay rules pulse a relay on the board; the lock checks below
         // (BLE alive, lock busy) don't apply to them.
         const int relay = relayChannel(rule->action);
+        if(relay > (int)s.relayCount)
+        {
+            // Not reached: validation refuses relayN beyond the relay count.
+            return reply(500, "error");
+        }
         if(relay == 0)
         {
+            if(_nuki == nullptr)
+            {
+                Log->println("Protect webhook: lock action, but no Nuki lock is enabled");
+                return reply(500, "error");
+            }
             // 4. The nuki task must be alive, or nothing would ever be sent.
-            taskENTER_CRITICAL(&bleHeartbeatMux);
-            const int64_t heartbeat = bleHeartbeatTs;
-            taskEXIT_CRITICAL(&bleHeartbeatMux);
-            if(heartbeat == 0)
+            const int64_t age = bleHeartbeatAgeMs();
+            if(age < 0)
             {
                 Log->println("Protect webhook: BLE not started yet");
-                return reply(resp, 503, "ble_stalled");
+                return reply(503, "ble_stalled");
             }
-            if(espMillis() - heartbeat > PROTECT_WEBHOOK_BLE_STALL_MS)
+            if(age > (int64_t)s.bleStallMs)
             {
-                Log->printf("Protect webhook: nuki task stalled for %lld ms, restarting\n",
-                            (long long)(espMillis() - heartbeat));
+                Log->printf("Protect webhook: nuki task stalled for %lld ms, restarting\n", (long long)age);
 #ifdef NUKI_HUB_WAVESHARE_8DI8RO
                 WaveshareBoard::recordBleEvent(WaveshareBoard::BLE_EVENT_STALLED);
 #endif
-                esp_err_t res = reply(resp, 503, "ble_stalled");
+                esp_err_t res = reply(503, "ble_stalled");
                 espDelay(100); // let the reply leave before the reboot
                 restartEsp(RestartReason::BLEError);
                 return res;
@@ -403,48 +389,48 @@ esp_err_t ProtectWebhook::handle(PsychicRequest* request, PsychicResponse* resp)
             if(_nuki->isLockActionPending())
             {
                 Log->println("Protect webhook: lock action pending, busy");
-                return reply(resp, 503, "busy");
+                return reply(503, "busy");
             }
         }
 
         // 6. Replay + cooldown, then act.
         const int64_t m = espMillis();
         taskENTER_CRITICAL(&lock);
-        const bool proceed = replayGuard.accept(eventId, (size_t)ruleIndex, m, PROTECT_WEBHOOK_COOLDOWN_MS);
+        const bool proceed = replayGuard.accept(eventId, (size_t)matched, m, s.cooldownMs);
         taskEXIT_CRITICAL(&lock);
         if(!proceed)
         {
             Log->println("Protect webhook: duplicate or cooldown");
-            return reply(resp, 429, "cooldown");
+            return reply(429, "cooldown");
         }
 
         if(relay > 0)
         {
 #ifdef NUKI_HUB_WAVESHARE_8DI8RO
-            const bool pulsed = WaveshareBoard::pulseRelay(relay, PROTECT_WEBHOOK_RELAY_PULSE_MS);
+            const bool pulsed = WaveshareBoard::pulseRelay(relay, s.relayPulseMs);
             Log->printf("Protect webhook: %s -> %s\n", rule->action, pulsed ? "pulsed" : "failed");
             ledFeedback(pulsed);
-            return pulsed ? reply(resp, 200, "ack") : reply(resp, 500, "error");
+            return pulsed ? reply(200, "ack") : reply(500, "error");
 #else
-            return reply(resp, 500, "error"); // not reached: registerRoute refuses relay rules
+            return reply(500, "error"); // not reached: no relays, validation refuses relay rules
 #endif
         }
 
         // Drop the action if the lock can't be reached in time: a press
         // shouldn't unlock the door long after the user gave up.
-        LockActionResult r = _nuki->requestLockAction(rule->action, espMillis() + PROTECT_WEBHOOK_ACTION_DEADLINE_MS);
+        LockActionResult r = _nuki->requestLockAction(rule->action, espMillis() + s.actionDeadlineMs);
         Log->printf("Protect webhook: %s -> %s\n", rule->action,
                     r == LockActionResult::Success ? "queued" : "refused");
         switch(r)
         {
-        case LockActionResult::Success:       ledFeedback(true);  return reply(resp, 200, "ack");
-        case LockActionResult::AccessDenied:  ledFeedback(false); return reply(resp, 403, "acl_denied");
-        default:                              ledFeedback(false); return reply(resp, 500, "error");
+        case LockActionResult::Success:       ledFeedback(true);  return reply(200, "ack");
+        case LockActionResult::AccessDenied:  ledFeedback(false); return reply(403, "acl_denied");
+        default:                              ledFeedback(false); return reply(500, "error");
         }
     }
 
     ledFeedback(false);
-    return reply(resp, 403, "no_match");
+    return reply(403, "no_match");
 }
 
 #endif

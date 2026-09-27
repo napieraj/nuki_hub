@@ -13,6 +13,7 @@
 #include "Config.h"
 #include "WaveshareBoard.h"
 #include "ProtectWebhook.h"
+#include "ForkSettings.h"
 #include "esp32-hal-log.h"
 #include "esp32-hal-bt-mem.h"
 #include "hal/wdt_hal.h"
@@ -1584,6 +1585,9 @@ void setup()
         Log->println("Time restored from the PCF85063 RTC");
     }
 #endif
+#ifdef NUKI_HUB_PROTECT_WEBHOOK
+    ForkSettings::begin();
+#endif
     initializeRestartReason();
 
     if(esp_reset_reason() == esp_reset_reason_t::ESP_RST_PANIC ||
@@ -1794,6 +1798,14 @@ void setup()
         serialReader = new SerialReader(importExport, network);
 #endif
     }
+#if defined(NUKI_HUB_PROTECT_WEBHOOK) && !defined(NUKI_HUB_UPDATER)
+    // This board never opens the AP. The USB console is the physical recovery
+    // path for the fork settings page ("forkcfg unlock", "forkcfg off").
+    if(serialReader == nullptr)
+    {
+        serialReader = new SerialReader(importExport, network);
+    }
+#endif
 
     if(lockEnabled || openerEnabled)
     {

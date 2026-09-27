@@ -31,31 +31,17 @@ cd nuki_hub
 ```
 If you cloned without `--recurse-submodules`: `git submodule update --init --recursive`.
 
-### 2. Create your webhook config
-```
-cp src/ProtectWebhookConfig.h.example src/ProtectWebhookConfig.h
-```
-The file is git-ignored; never commit it. Generate the values:
-```
-openssl rand -hex 32    # the secret (Bearer token Protect sends)
-openssl rand -hex 16    # one token per alarm, e.g. "hold right" and "press right"
-```
-Edit `src/ProtectWebhookConfig.h`:
-- `PROTECT_WEBHOOK_SECRET`: the 64-character secret.
-- `PROTECT_WEBHOOK_SOURCE_IP`: your UniFi console's IP, e.g. `"192.0.2.10"`.
-- `PROTECT_WEBHOOK_RULES`: one line per alarm. The fob MAC is on the fob's page in
-  Protect, or in a captured press (step 7). Example for one fob:
-  ```
-  static constexpr ProtectRule PROTECT_WEBHOOK_RULES[] = {
-      { "<hold token>",  "sensor_button_pressed", "AA:BB:CC:DD:EE:01", "button", "right", "value", "longPress", "unlock" },
-      { "<press token>", "sensor_button_pressed", "AA:BB:CC:DD:EE:01", "button", "right", "value", "press",     "lock"   },
-  };
-  ```
-  Hold (3 s) to unlock is hard to trigger by accident in a pocket. `unlatch` also
-  works; it is never retried after a timeout, so it can't open the door twice.
+### 2. Webhook config: nothing to do before building
+The webhook (secret, source IP, rules, relays) is configured later on the
+board's web page **Protect Webhook & Relays** (step 9) and stored on the board.
+There is no config file to fill in, and changing a rule never needs a reflash.
 
-The build refuses the file if the secret or a token is still a placeholder or too
-short, or a rule is incomplete; the error message says which.
+Optional: if you prefer to prepare the values up front, copy
+`src/ProtectWebhookConfig.h.example` to `src/ProtectWebhookConfig.h` (ignored by
+git; never commit it) and fill it in. It is only used once, to fill the web
+page's settings on the first boot of an empty board; after that the web page
+wins and the file is ignored. The build refuses the file if the secret or a
+token is still a placeholder or too short, or a rule is incomplete.
 
 ### 3. Build
 ```
@@ -135,7 +121,7 @@ lock (keypad, turning by hand) only show up at the next status poll.
    `http://<computer-ip>:8099/capture`, method **POST**.
 3. Hold Right for 3 s. Check that the JSON has `"key":"sensor_button_pressed"`,
    `"button":"right"`, `"value":"longPress"` and the fob MAC in `"device"`. If
-   anything differs, adjust your rules (step 2) and rebuild.
+   anything differs, use what you see in your rules (step 9).
 4. Press Right briefly, and press Left: nothing should arrive.
 5. Delete this test alarm.
 
@@ -151,18 +137,44 @@ lock (keypad, turning by hand) only show up at the next status poll.
 - Bluetooth range: the lock needs a good signal. Mount the antenna outside any
   metal cabinet, with a clear path towards the lock.
 
-### 9. Create the real alarms in Protect
+### 9. Configure the webhook on the board
+Open **Protect Webhook & Relays** in the web UI (it needs the login from step 5;
+the page shows a red warning if the web UI has no password).
+1. **Secret:** press *Generate random*, copy the 64-character value somewhere safe
+   (you need it for every Protect alarm in step 10), then continue. After saving,
+   the page never shows it again, only "set, 64 characters".
+2. **Source IP:** your UniFi console's IP, e.g. `192.0.2.10`.
+3. **Rules:** one per alarm. For "Fob A - Hold Right":
+   enabled, name `Fob A - Hold Right`, token *Generate random* (copy it: it goes into
+   the alarm's URL), key `sensor_button_pressed`, device `AA:BB:CC:DD:EE:01` (the
+   fob MAC from the fob's page in Protect or from step 7), field `button` =
+   `right`, field 2 `value` = `longPress`, action **Lock: unlock**.
+   "Fob A - Press Right": the same with its own token, value 2 `press`, action
+   **Lock: lock**. Hold (3 s) to unlock is hard to trigger by accident in a
+   pocket. `unlatch` also works; it is never retried after a timeout, so it
+   can't open the door twice.
+4. Tick **Webhook enabled** and **Save**. The page checks everything (secret
+   ≥ 32 characters, tokens ≥ 16, a MAC and an action per rule, …) and says what
+   to fix; nothing is stored until it passes. Changes apply at once.
+5. The status box at the top should read **Webhook: Active** and **Clock: Synced**.
+
+Optional hardening on the same page (all off by default, one line of help each):
+*Bearer only*, *Require source IP*, *Require a TOTP code for every save*, and the
+*Settings lock* (saving only while a DI input you wired is active). Recovery
+over USB-C serial: `forkcfg unlock`, `forkcfg off`. Details: `PROTECT_SETUP.md`.
+
+### 10. Create the real alarms in Protect
 One alarm per rule, e.g. "Fob A - Hold Right" and "Fob A - Press Right":
 - Trigger: **Button**, the gesture (**Long Press (3s)** or **Press**), scope the fob's **Right** button.
 - Action: **Custom Webhook**, `http://<board-ip>/protect?r=<that rule's token>`, method **POST**.
-- Authentication: **Bearer**, token = your `PROTECT_WEBHOOK_SECRET`.
+- Authentication: **Bearer**, token = the secret from step 9.
 - Leave **Ignore repeated actions** off. Don't tie the alarm to an arm profile.
 
-### 10. Test without moving the lock
+### 11. Test without moving the lock
 1. In **Nuki Lock Access Control**, untick the actions your rules use.
 2. The board only accepts requests from the console's IP. For this test, either run
-   the tool on a machine with that IP, or flash a temporary build with
-   `PROTECT_WEBHOOK_SOURCE_IP` set to your computer (don't keep it).
+   the tool on a machine with that IP, or temporarily set the source IP on the
+   web page to your computer's IP (set it back afterwards).
 3. Run:
    ```
    scripts/protect_webhook_test.py suite --url http://<board-ip>/protect --bearer \
@@ -182,21 +194,26 @@ One alarm per rule, e.g. "Fob A - Hold Right" and "Fob A - Press Right":
 - **Response codes** Protect sees: see `PROTECT_SETUP.md`.
 - **Info page** ("System Information"): the last restart reason, and every
   Bluetooth error or beacon loss that rebooted the board (last 10 and counts).
-- **A press did nothing:** check the USB log or the info page. Common causes: no
+- **A press did nothing:** check the web page's status box and recent requests,
+  the USB log or the info page. Common causes: no
   NTP (`503 no_time`), the lock out of range (`Lock action expired` after 8 s),
   a Protect alarm pointing at the wrong token, or the action unticked in the ACL.
-- **Lost fob:** delete it in Protect **and** remove its rules from
-  `ProtectWebhookConfig.h`, then rebuild and flash.
+- **Lost fob:** delete it in Protect **and** disable its rules on the web page
+  (applies at once). In a hurry: *Switch the webhook off now* on the page, or
+  `forkcfg off` on the USB console.
+- **What happened to a press:** the web page's "Recent webhook requests" lists
+  the last 10 results since boot.
 - **Exit button:** wire a dry contact between a DI input (DI1-8 = GPIO 4-11) and
   DGND and give that GPIO the role **Input: Unlock**. GPIO actions bypass the ACL,
   so keep the button and wiring on the inside.
 
 ### Checklist
-- [ ] Config file created, builds with `SUCCESS`
+- [ ] Builds with `SUCCESS`
 - [ ] Flashed; web UI reachable at a reserved IP
 - [ ] Credentials + TOTP/Duo set; HTTPS off
 - [ ] Lock paired ("Paired: Yes"), ACL allows only the needed actions
 - [ ] Payload captured once and rules match it
 - [ ] Board has NTP (no `503 no_time`); firewall allows only the console on port 80
+- [ ] Webhook configured on the web page: status "Active", clock "Synced"
 - [ ] Protect alarms created with Bearer auth and per-alarm tokens
 - [ ] Bench suite 17/17, then a real fob press unlocks and locks

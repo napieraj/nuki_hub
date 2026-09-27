@@ -44,6 +44,7 @@ static esp_hosted_coprocessor_fwver_t host_version_struct = {
 #include <NetworkClientSecure.h>
 #include "ArduinoJson.h"
 #include "ProtectWebhook.h"
+#include "ForkSettings.h"
 #include "WaveshareBoard.h"
 #include <freertos/queue.h>
 
@@ -877,6 +878,12 @@ void WebCfgServer::initialize()
                     return buildDuoHtml(request, resp, 1);
                 }
             }
+#ifdef NUKI_HUB_PROTECT_WEBHOOK
+            else if (value == "forkcfg")
+            {
+                return buildForkSettingsHtml(request, resp);
+            }
+#endif
             else if (value == "impexpcfg")
             {
                 return buildImportExportHtml(request, resp);
@@ -1214,6 +1221,12 @@ void WebCfgServer::initialize()
                 return buildConfirmHtml(request, resp, message, 3, true);
             }
 
+#ifdef NUKI_HUB_PROTECT_WEBHOOK
+            if (value == "forkcfg")
+            {
+                return processForkSettings(request, resp);
+            }
+#endif
             if (value == "savegpiocfg")
             {
                 processGpioArgs(request, resp);
@@ -5120,6 +5133,13 @@ esp_err_t WebCfgServer::buildHtml(PsychicRequest *request, PsychicResponse* resp
     buildNavigationMenuEntry(&response, "GPIO Configuration", "/get?page=gpiocfg");
     buildNavigationMenuEntry(&response, "Firmware update", "/get?page=ota");
     buildNavigationMenuEntry(&response, "Import/Export Configuration", "/get?page=impexpcfg");
+#ifdef NUKI_HUB_PROTECT_WEBHOOK
+    {
+        ForkSettings::State forkState;
+        ForkSettings::state(forkState);
+        buildNavigationMenuEntry(&response, "Protect Webhook &amp; Relays", "/get?page=forkcfg", forkState.active ? "" : "Webhook off");
+    }
+#endif
     if(_preferences->getInt(preference_network_hardware, 0) == 11)
     {
         buildNavigationMenuEntry(&response, "Custom Ethernet Configuration", "/get?page=custntw");
@@ -7070,6 +7090,9 @@ esp_err_t WebCfgServer::processFactoryReset(PsychicRequest *request, PsychicResp
 
     _network->disableHASS();
     _preferences->clear();
+#ifdef NUKI_HUB_PROTECT_WEBHOOK
+    ForkSettings::factoryReset();
+#endif
 
 #ifndef CONFIG_IDF_TARGET_ESP32H2
     if(!resetWifi)
