@@ -17,12 +17,14 @@ The board only accepts requests from PROTECT_WEBHOOK_SOURCE_IP. For bench runs
 either run this on a host with that IP, or build a bench firmware with that
 IP set to your laptop (or "" to disable the check). Never ship the latter.
 
-Example (recommended token-per-alarm rules):
-  ./protect_webhook_test.py suite --url http://192.0.2.20/protect \\
-      --secret "$SECRET" --token "$HOLD_RIGHT_TOKEN" --device AA:BB:CC:DD:EE:01
+Example matching the recommended rule (token + key + button + gesture):
+  ./protect_webhook_test.py suite --url http://192.0.2.20/protect --bearer \\
+      --secret "$SECRET" --token "$HOLD_RIGHT_TOKEN" --device AA:BB:CC:DD:EE:01 \\
+      --key-checked --field button --value right --field2 value --value2 longPress
 
-If your rule also checks captured fields, pass them too:
-  --key <key> --key-checked --field <field> --value <v> [--field2 <f2> --value2 <v2>]
+Events are shaped like UniFi Protect 7.2.105's Alarm Manager fob trigger:
+  {"key":"sensor_button_pressed","value":<press|longPress|doublePress>,
+   "device":<fob MAC>,"button":<arm|night|disarm|panic|left|right>,"eventId","timestamp"}
 """
 
 import argparse
@@ -36,7 +38,7 @@ import urllib.request
 import uuid
 
 
-def build_event(device, key="button", fields=None, ts_ms=None, event_id=None, legacy=False):
+def build_event(device, key="sensor_button_pressed", fields=None, ts_ms=None, event_id=None, legacy=False):
     """Alarm Manager envelope around one trigger.
 
     legacy=True mimics older payloads: no per-trigger eventId/timestamp, only
@@ -50,28 +52,39 @@ def build_event(device, key="button", fields=None, ts_ms=None, event_id=None, le
     for f, v in (fields or {}).items():
         if f:
             trigger[f] = v
+    source = {"device": device, "type": "include"}
+    if trigger.get("button"):
+        source["buttons"] = [trigger["button"]]
+    condition = {"type": "is", "source": key}
+    if trigger.get("value") is not None:
+        condition["value"] = trigger["value"]
     return {
         "alarm": {
             "name": "Bench fob test",
-            "sources": [{"device": device, "type": "include"}],
-            "conditions": [{"condition": {"type": "is", "source": key}}],
+            "sources": [source],
+            "conditions": [{"condition": condition}],
             "triggers": [trigger],
         },
         "timestamp": now,
     }
 
 
+BEARER = False  # set by --bearer: send the secret as "Authorization: Bearer" like Protect
+
+
 def post(url, secret, body, token=None, timeout=5.0):
-    """POST raw bytes to url?k=secret[&r=token]. Returns (status, parsed-or-text)."""
+    """POST like Protect: url?r=token with ?k=secret or a Bearer header."""
     parts = urllib.parse.urlsplit(url)
-    q = {"k": secret}
+    q = {} if BEARER else {"k": secret}
     if token is not None:
         q["r"] = token
     target = urllib.parse.urlunsplit((parts.scheme, parts.netloc, parts.path,
                                       urllib.parse.urlencode(q), ""))
     data = body if isinstance(body, bytes) else json.dumps(body).encode()
-    req = urllib.request.Request(target, data=data, method="POST",
-                                 headers={"Content-Type": "application/json"})
+    headers = {"Content-Type": "application/json", "User-Agent": "protect-alarm-manager"}
+    if BEARER:
+        headers["Authorization"] = "Bearer " + secret
+    req = urllib.request.Request(target, data=data, method="POST", headers=headers)
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             status, raw = resp.status, resp.read()
@@ -195,13 +208,15 @@ def main():
         s.add_argument("--secret", required=True)
         s.add_argument("--device", required=True, help="fob MAC as Protect sends it")
         s.add_argument("--token", help="per-alarm rule token (?r=), if the rule uses one")
-        s.add_argument("--key", default="button", help="trigger key to send")
+        s.add_argument("--key", default="sensor_button_pressed", help="trigger key to send")
         s.add_argument("--key-checked", action="store_true",
                        help="the rule checks --key (adds a wrong-key case)")
         s.add_argument("--field", help="button field, if the rule checks one")
         s.add_argument("--value", help="expected button value")
         s.add_argument("--field2", help="gesture field, if the rule checks one")
         s.add_argument("--value2", help="expected gesture value")
+        s.add_argument("--bearer", action="store_true",
+                       help="send the secret as 'Authorization: Bearer' instead of ?k=")
         s.add_argument("--legacy", action="store_true",
                        help="send old-style triggers without eventId/timestamp")
         if name == "suite":
@@ -210,6 +225,8 @@ def main():
         s.set_defaults(func=func)
 
     args = p.parse_args()
+    global BEARER
+    BEARER = getattr(args, "bearer", False)
     sys.exit(args.func(args) or 0)
 
 

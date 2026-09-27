@@ -25,13 +25,22 @@ namespace
     }
 }
 
-void WaveshareBoard::relaysOff()
+void WaveshareBoard::earlyInit()
 {
-    // Output register (0x01) low first, then configure all pins as outputs (0x03).
+    // Relays: output register (0x01) low first, then all pins to outputs (0x03).
+    // The TCA9554 powers up with outputs latched high and pins as inputs, and it
+    // has no reset line, so this order matters. Never swap it.
     Wire.begin(I2C_SDA, I2C_SCL, 100000);
     tcaWrite(0x01, 0x00);
     tcaWrite(0x03, 0x00);
     Wire.end();
+
+    // W5500 hardware reset. An ESP32 reset alone does not reset the W5500.
+    pinMode(ETH_RST, OUTPUT);
+    digitalWrite(ETH_RST, LOW);
+    delay(2);
+    digitalWrite(ETH_RST, HIGH);
+    delay(5);
 }
 
 int WaveshareBoard::pinNetworkHardware(Preferences* preferences)
@@ -51,6 +60,16 @@ int WaveshareBoard::pinNetworkHardware(Preferences* preferences)
         preferences->putBool(preference_ntw_reconfigure, true);
     }
     return 11;
+}
+
+void WaveshareBoard::applyDefaults(Preferences* preferences)
+{
+    // Upstream reads an unset TX power as 0 and applies +3 dBm, while its web UI
+    // shows 9 on S3, so re-saving "9" is a no-op. Make the default explicit.
+    if(!preferences->isKey(preference_ble_tx_power))
+    {
+        preferences->putInt(preference_ble_tx_power, DEFAULT_BLE_TX_POWER);
+    }
 }
 
 #endif

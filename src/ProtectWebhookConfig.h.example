@@ -4,37 +4,44 @@
 //
 // Written for UniFi SuperLink KeyFobs (USL-FOB) via Alarm Manager
 // "Activity -> Button". Capture one real press first
-// (scripts/protect_webhook_test.py listen) to confirm the fob's device value.
+// (scripts/protect_webhook_test.py listen) to confirm the fields below.
 
-// Long random secret, passed as ?k=... in the Protect "Delivery URL".
-// Generate with: openssl rand -hex 32
+// Long random secret: set it as Protect's webhook "Bearer" auth (preferred) or
+// append ?k=... to the Delivery URL. Generate with: openssl rand -hex 32
 #define PROTECT_WEBHOOK_SECRET "replace-with-64-hex-chars"
 
 // Only accept requests from the Protect console (UniFi OS) IP. "" disables the check.
 #define PROTECT_WEBHOOK_SOURCE_IP "192.0.2.10"
 
-// What is documented (Protect Integration API spec 7.2.105):
-//   - fob button presses are "sensorButtonPressed" events whose
-//     metadata.button.text is arm | disarm | night | panic | left | right
-//     (top-left, bottom-left, top-right, bottom-right, L, R). No gesture field.
-// What is NOT documented: how an Alarm Manager "Activity -> Button" trigger
-// encodes the button (and Press/Hold/Double) in the webhook body.
+// What a fob press looks like in the Alarm Manager webhook (UniFi Protect
+// 7.2.105 source, service.js; same builder in Local and Global Alarm Manager
+// mode; not yet confirmed by a live capture):
+//   {"alarm":{"name":..,"sources":[{"device":"AABBCCDDEEFF","type":"include","buttons":["right"]}],
+//             "conditions":[{"condition":{"type":"is","source":"sensor_button_pressed","value":"longPress"}}],
+//             "triggers":[{"key":"sensor_button_pressed","value":"longPress",
+//                          "device":"AABBCCDDEEFF","button":"right","eventId":..,"timestamp":..}]},
+//    "timestamp":..}
+//   button: arm (top left) | night (top right) | disarm (bottom left) |
+//           panic (bottom right) | left | right
+//   value:  press | longPress (the app's "Hold", 3 s) | doublePress
 //
-// Recommended: let Protect filter. Create ONE Alarm Manager alarm per
-// button+gesture you use, each with its own Delivery URL token
-//     http://<board>/protect?k=<secret>&r=<token>
-// and match here on token + fob only. Nothing undocumented is parsed.
+// Defence in depth: one Alarm Manager alarm per button+gesture, each with its
+// own URL token (Protect filters), AND check key/button/gesture here.
+//     Delivery URL: http://<board>/protect?r=<token>
+//     Auth: Bearer <PROTECT_WEBHOOK_SECRET>   (or append &k=<secret> to the URL)
 //
 // Rule fields (nullptr = not checked):
 //   token    per-alarm URL token (?r=...), openssl rand -hex 16
-//   key      triggers[].key                     (only if you captured it)
-//   device   triggers[].device = the fob's MAC   (required; separators/case ignored)
-//   field    trigger field naming the button     (only if you captured it)
-//   value    expected content of field
-//   field2   second field, e.g. the gesture
-//   value2   expected content of field2
-//   action   Nuki Hub lock action: "unlock", "unlatch", "lock", "lockngo", ...
-//            still subject to Nuki Hub's "Nuki Lock Access Control" ACL
+//   key      triggers[].key                      "sensor_button_pressed"
+//   device   triggers[].device = the fob's MAC    (required; separators/case ignored)
+//   field    trigger field naming the button      "button"
+//   value    expected button                      e.g. "right"
+//   field2   trigger field naming the gesture     "value"
+//   value2   expected gesture                     e.g. "longPress"
+//   action   Nuki Hub lock action: "unlock", "lock", "lockngo", ...
+//            still subject to Nuki Hub's "Nuki Lock Access Control" ACL.
+//            Prefer "unlock" over "unlatch": a timed-out command is retried,
+//            and a repeated unlock is harmless where a repeated unlatch is not.
 // A rule with neither token nor key+value matches ANY event from that fob.
 struct ProtectRule
 {
@@ -49,12 +56,12 @@ struct ProtectRule
 };
 
 static const ProtectRule PROTECT_WEBHOOK_RULES[] = {
-    // Alarm "Fob A - Hold Right" -> unlock (a hold is hard to trigger in a pocket)
-    { "replace-with-32-hex-token-hold-right", nullptr, "AA:BB:CC:DD:EE:01",
-      nullptr, nullptr, nullptr, nullptr, "unlock" },
+    // Alarm "Fob A - Hold Right" -> unlock (a 3 s hold is hard to trigger in a pocket)
+    { "replace-with-32-hex-token-hold-right", "sensor_button_pressed", "AA:BB:CC:DD:EE:01",
+      "button", "right", "value", "longPress", "unlock" },
     // Alarm "Fob A - Press Right" -> lock
-    { "replace-with-32-hex-token-press-right", nullptr, "AA:BB:CC:DD:EE:01",
-      nullptr, nullptr, nullptr, nullptr, "lock" },
+    { "replace-with-32-hex-token-press-right", "sensor_button_pressed", "AA:BB:CC:DD:EE:01",
+      "button", "right", "value", "press", "lock" },
 };
 
 // Reject events whose Protect timestamp is further than this from our (NTP) clock.

@@ -1512,7 +1512,7 @@ void logCoreDump()
 void setup()
 {
 #ifdef NUKI_HUB_WAVESHARE_8DI8RO
-    WaveshareBoard::relaysOff();
+    WaveshareBoard::earlyInit();
 #endif
 #if defined(CONFIG_SOC_SPIRAM_SUPPORTED) && defined(CONFIG_SPIRAM)
 #ifndef FORCE_NUKI_HUB_HTTPS_SERVER
@@ -1542,6 +1542,9 @@ void setup()
     preferences = new Preferences();
     preferences->begin("nukihub", false);
     initPreferences(preferences);
+#ifdef NUKI_HUB_WAVESHARE_8DI8RO
+    WaveshareBoard::applyDefaults(preferences);
+#endif
     initializeRestartReason();
 
     if(esp_reset_reason() == esp_reset_reason_t::ESP_RST_PANIC ||

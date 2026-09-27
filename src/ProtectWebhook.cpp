@@ -128,7 +128,23 @@ esp_err_t ProtectWebhook::handle(PsychicRequest* request, PsychicResponse* resp)
         Log->println("Protect webhook: rejected source IP");
         return reply(resp, 403, "denied");
     }
-    if(!request->hasParam("k") || !secretMatches(request->getParam("k")->value()))
+    // Secret: "?k=<secret>" in the Delivery URL, or Protect's Bearer auth option
+    // ("Authorization: Bearer <secret>"), which keeps it out of URLs and logs.
+    String provided;
+    if(request->hasParam("k"))
+    {
+        provided = request->getParam("k")->value();
+    }
+    else if(request->hasHeader("Authorization"))
+    {
+        const String auth = request->header("Authorization");
+        if(auth.startsWith("Bearer "))
+        {
+            provided = auth.substring(7);
+            provided.trim();
+        }
+    }
+    if(provided.length() == 0 || !secretMatches(provided))
     {
         Log->println("Protect webhook: bad secret");
         return reply(resp, 403, "denied");
