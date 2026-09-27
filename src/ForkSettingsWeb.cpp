@@ -630,11 +630,11 @@ esp_err_t WebCfgServer::buildForkSettingsHtml(PsychicRequest* request, PsychicRe
             }
             response.print(")");
         }
-        response.print("</summary><table>");
+        response.print("</summary>");
         snprintf(name, sizeof(name), "R%u_SEEN", n);
         response.print("<input type=\"hidden\" name=\"");
         response.print(name);
-        response.print("\" value=\"1\">");
+        response.print("\" value=\"1\"><table>");
 
         snprintf(name, sizeof(name), "R%u_EN", n);
         printCheckBox(&response, name, "Enabled", r.enabled, "");

@@ -1,10 +1,20 @@
 #pragma once
-// Copy to ProtectWebhookConfig.h (git-ignored) and fill in. Build with
-// -DNUKI_HUB_PROTECT_WEBHOOK. All values below are placeholders: the build
-// refuses them (static_assert) unless -DPROTECT_WEBHOOK_ALLOW_PLACEHOLDERS,
-// which only CI uses. Other build-time checks: secret >= 32 chars, tokens >= 16,
-// every rule has a device and an action, value needs field, value2 needs field2,
-// and every rule has a token or key + value (see below).
+// OPTIONAL. The webhook is configured on the web page "Protect Webhook &
+// Relays" and stored in NVS; the build works without this file (the webhook
+// then starts switched off until you configure it there).
+//
+// If you copy this to ProtectWebhookConfig.h (ignored by version control),
+// its values seed NVS once, on the first boot that finds no saved settings
+// (fresh board, after a factory reset or "pio run -t erase"). After that the
+// web page wins and this file is ignored; changing it and reflashing changes
+// nothing.
+//
+// Build-time checks still apply when the file exists, because whatever it
+// holds goes live on a fresh board: placeholders are refused unless
+// -DPROTECT_WEBHOOK_ALLOW_PLACEHOLDERS (CI only; placeholder secrets and
+// tokens are never seeded), secret >= 32 chars, tokens >= 16, every rule has
+// a device and an action, value needs field, value2 needs field2, and every
+// rule has a token or key + value (see below). At most 12 rules.
 //
 // Written for UniFi SuperLink KeyFobs (USL-FOB) via Alarm Manager
 // "Activity -> Button". Capture one real press first
@@ -42,7 +52,7 @@
 //   value    expected button                      e.g. "right"
 //   field2   trigger field naming the gesture     "value"
 //   value2   expected gesture                     e.g. "longPress"
-//   action   Nuki Hub lock action: "unlock", "lock", "unlatch", "lockngo", ...
+//   action   Nuki Hub lock action: "unlock", "lock", "unlatch", "lockNgo", ...
 //            still subject to Nuki Hub's "Nuki Lock Access Control" ACL.
 //            Or, on the Waveshare 8DI-8RO build, "relay1".."relay8": close that
 //            relay for PROTECT_WEBHOOK_RELAY_PULSE_MS (e.g. wired across an
@@ -50,8 +60,9 @@
 //            Prefer "unlock" over "unlatch": a timed-out command is retried,
 //            and a repeated unlock is harmless where a repeated unlatch is not.
 // A rule with neither token nor key+value would match ANY event from that fob;
-// the build refuses it unless -DPROTECT_WEBHOOK_ALLOW_BROAD_RULES.
-// An unknown action disables the whole route at boot (logged).
+// the build refuses it unless -DPROTECT_WEBHOOK_ALLOW_BROAD_RULES (seeds the
+// page's "Allow broad rules" option). An unknown action, or a device that isn't
+// 12 hex digits, keeps the webhook off until fixed on the web page.
 struct ProtectRule
 {
     const char* token;

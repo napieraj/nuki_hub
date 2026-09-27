@@ -18,9 +18,10 @@ Standard library only. Three commands:
            a different rule is accepted inside the first rule's cooldown; its
            action must be unticked too.
 
-The board only accepts requests from PROTECT_WEBHOOK_SOURCE_IP. For bench runs
-either run this on a host with that IP, or build a bench firmware with that
-IP set to your laptop (or "" to disable the check). Never ship the latter.
+The board only accepts requests from the source IP set on its web page
+"Protect Webhook & Relays". For bench runs either run this on a host with that
+IP, or temporarily set it to your laptop's IP there (or empty it). Set it back
+to the console's IP afterwards.
 
 Example matching the recommended rules (token + key + button + gesture):
   ./protect_webhook_test.py suite --url http://192.0.2.20/protect --bearer \\
@@ -263,7 +264,7 @@ def main():
                            help="confirm the rule's action is unticked in Nuki Lock Access Control "
                                 "(otherwise you are asked)")
             s.add_argument("--cooldown-ms", type=int, default=10000,
-                           help="PROTECT_WEBHOOK_COOLDOWN_MS of the board (default 10000)")
+                           help="the board's cooldown per rule (web page, default 10000)")
             s.add_argument("--token2", help="token of a second rule, to check per-rule cooldown")
             s.add_argument("--rule2-value", help="button of the second rule (default: --value)")
             s.add_argument("--rule2-value2", help="gesture of the second rule (default: --value2)")
