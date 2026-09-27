@@ -740,7 +740,17 @@ bool NukiNetwork::reconnect(bool force)
 
         if(strcmp(_mqttBrokerAddr, "") == 0)
         {
+#ifdef NUKI_HUB_WAVESHARE_8DI8RO
+            // This build runs without MQTT by design: say it once, not every 6 s.
+            static bool loggedNoBroker = false;
+            if(!loggedNoBroker)
+            {
+                loggedNoBroker = true;
+                Log->println("MQTT Broker not configured, MQTT disabled.");
+            }
+#else
             Log->println("MQTT Broker not configured, aborting connection attempt.");
+#endif
             _nextReconnect = espMillis() + 5000;
 
             if(_device->isConnected())
