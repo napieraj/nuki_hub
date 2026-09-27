@@ -2,3 +2,9 @@
 # keep lwIP on core 1 with the network task and httpd; core 0 stays with BLE.
 CONFIG_LWIP_TCPIP_TASK_AFFINITY_NO_AFFINITY=n
 CONFIG_LWIP_TCPIP_TASK_AFFINITY_CPU1=y
+
+# BLE is the only radio user (Wi-Fi is compiled out with NUKI_HUB_NO_WIFI, see
+# platformio.ini). Espressif recommends turning software Wi-Fi/BT coexistence
+# off when only Bluetooth is used. Do not keep this with a build that can
+# start Wi-Fi.
+CONFIG_ESP_COEX_SW_COEXIST_ENABLE=n
