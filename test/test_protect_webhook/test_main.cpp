@@ -217,6 +217,40 @@ void test_rule_index_out_of_range()
     TEST_ASSERT_FALSE(guard.accept("a", 1, NOW, 0));
 }
 
+void test_unlatch_not_retried_after_ambiguous_result()
+{
+    // NukiLock::LockAction and Nuki::CmdResult values.
+    const uint8_t UNLOCK = 0x01, LOCK = 0x02, UNLATCH = 0x03, LOCKNGO = 0x04,
+                  LOCKNGO_UNLATCH = 0x05, FULL_LOCK = 0x06, FOB1 = 0x81, FOB3 = 0x83;
+    const uint8_t FAILED = 2, TIMEOUT = 3, NOT_PAIRED = 5, LOCK_BUSY = 6, ERROR = 99;
+
+    TEST_ASSERT_TRUE(lockActionUnlatches(UNLATCH));
+    TEST_ASSERT_TRUE(lockActionUnlatches(LOCKNGO_UNLATCH));
+    TEST_ASSERT_TRUE(lockActionUnlatches(FOB1));
+    TEST_ASSERT_TRUE(lockActionUnlatches(FOB3));
+    TEST_ASSERT_FALSE(lockActionUnlatches(UNLOCK));
+    TEST_ASSERT_FALSE(lockActionUnlatches(LOCK));
+    TEST_ASSERT_FALSE(lockActionUnlatches(LOCKNGO));
+    TEST_ASSERT_FALSE(lockActionUnlatches(FULL_LOCK));
+
+    const uint8_t unlatching[] = {UNLATCH, LOCKNGO_UNLATCH, FOB1};
+    for(uint8_t a : unlatching)
+    {
+        TEST_ASSERT_FALSE(lockActionRetryable(a, TIMEOUT));
+        TEST_ASSERT_FALSE(lockActionRetryable(a, FAILED));
+        TEST_ASSERT_FALSE(lockActionRetryable(a, LOCK_BUSY));
+        TEST_ASSERT_FALSE(lockActionRetryable(a, ERROR));
+        TEST_ASSERT_TRUE(lockActionRetryable(a, NOT_PAIRED));
+    }
+    const uint8_t others[] = {UNLOCK, LOCK, LOCKNGO, FULL_LOCK};
+    for(uint8_t a : others)
+    {
+        TEST_ASSERT_TRUE(lockActionRetryable(a, TIMEOUT));
+        TEST_ASSERT_TRUE(lockActionRetryable(a, FAILED));
+        TEST_ASSERT_TRUE(lockActionRetryable(a, LOCK_BUSY));
+    }
+}
+
 int main()
 {
     UNITY_BEGIN();
@@ -235,5 +269,6 @@ int main()
     RUN_TEST(test_replay_cache_is_bounded);
     RUN_TEST(test_relay_actions);
     RUN_TEST(test_rule_index_out_of_range);
+    RUN_TEST(test_unlatch_not_retried_after_ambiguous_result);
     return UNITY_END();
 }
