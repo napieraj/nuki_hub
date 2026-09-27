@@ -9,18 +9,24 @@ Standard library only. Three commands:
   send     Send one Protect-shaped event to the board.
 
   suite    Run the accept/reject sequence against the board and check every
-           response. Run it with the rule's action DISABLED in Nuki Hub's
-           "Nuki Lock Access Control": the fully valid event then ends in
-           403 acl_denied, which proves the whole path without moving the lock.
+           response. Run it with the rule's action UNTICKED in Nuki Hub's
+           "Nuki Lock Access Control" and pass --acl-disabled (or confirm at
+           the prompt): the fully valid event then ends in 403 acl_denied,
+           which proves the whole path without moving the lock. If the action
+           is still ticked, the valid case REALLY moves the lock.
+           With --token2 (a second rule, e.g. press-to-lock), also checks that
+           a different rule is accepted inside the first rule's cooldown; its
+           action must be unticked too.
 
 The board only accepts requests from PROTECT_WEBHOOK_SOURCE_IP. For bench runs
 either run this on a host with that IP, or build a bench firmware with that
 IP set to your laptop (or "" to disable the check). Never ship the latter.
 
-Example matching the recommended rule (token + key + button + gesture):
+Example matching the recommended rules (token + key + button + gesture):
   ./protect_webhook_test.py suite --url http://192.0.2.20/protect --bearer \\
       --secret "$SECRET" --token "$HOLD_RIGHT_TOKEN" --device AA:BB:CC:DD:EE:01 \\
-      --key-checked --field button --value right --field2 value --value2 longPress
+      --key-checked --field button --value right --field2 value --value2 longPress \\
+      --token2 "$PRESS_RIGHT_TOKEN" --rule2-value2 press --acl-disabled
 
 Events are shaped like UniFi Protect 7.2.105's Alarm Manager fob trigger:
   {"key":"sensor_button_pressed","value":<press|longPress|doublePress>,
@@ -134,62 +140,93 @@ def cmd_send(args):
 
 def cmd_suite(args):
     url, secret, token, dev, key = args.url, args.secret, args.token, args.device, args.key
+    cooldown_s = args.cooldown_ms / 1000
     now = lambda: int(time.time() * 1000)
+
+    if args.live:
+        print("LIVE MODE: the 'valid press' case will actuate the lock.")
+        if input("Type 'unlock' to continue: ").strip() != "unlock":
+            return 1
+    elif not args.acl_disabled:
+        print("The 'valid press' case passes every check on the board. Unless the rule's")
+        print("action is UNTICKED in Nuki Hub -> Nuki Lock Access Control, it REALLY moves")
+        print("the lock." + (" The same applies to the --token2 rule's action." if args.token2 else ""))
+        if input("Is the action unticked? Type 'yes' to continue: ").strip() != "yes":
+            return 1
 
     def ev(device=None, key_=None, value=None, value2=None, ts_ms=None, event_id=None, legacy=None):
         return build_event(device or dev, key_ or key, _fields(args, value, value2),
                            ts_ms=ts_ms, event_id=event_id,
                            legacy=args.legacy if legacy is None else legacy)
 
-    # (name, secret, token, body, expected status, expected result)
+    # Bodies are built right before sending (callables), so timestamps are fresh.
+    # (name, secret, token, body(), expected status, expected result(s))
     cases = [
-        ("wrong secret",        "x" * len(secret), token, ev(), 403, "denied"),
-        ("malformed JSON",      secret, token, b"{not json", 400, "bad_json"),
-        ("no triggers",         secret, token, {"alarm": {}}, 400, "no_triggers"),
-        ("oversized body",      secret, token, b"{" + b" " * 5000 + b"}", 413, "bad_size"),
-        ("other fob",           secret, token, ev(device="00:11:22:33:44:55"), 403, "no_match"),
-        ("stale (-60 s)",       secret, token, ev(ts_ms=now() - 60_000), 403, "no_match"),
-        ("future (+60 s)",      secret, token, ev(ts_ms=now() + 60_000), 403, "no_match"),
-        ("legacy shape, stale", secret, token, ev(ts_ms=now() - 60_000, legacy=True), 403, "no_match"),
+        ("wrong secret",        "x" * len(secret), token, lambda: ev(), 403, "denied"),
+        ("malformed JSON",      secret, token, lambda: b"{not json", 400, "bad_json"),
+        ("no triggers",         secret, token, lambda: {"alarm": {}}, 400, "no_triggers"),
+        ("oversized body",      secret, token, lambda: b"{" + b" " * 5000 + b"}", 413, "bad_size"),
+        ("other fob",           secret, token, lambda: ev(device="00:11:22:33:44:55"), 403, "no_match"),
+        ("stale (-60 s)",       secret, token, lambda: ev(ts_ms=now() - 60_000), 403, "no_match"),
+        ("future (+60 s)",      secret, token, lambda: ev(ts_ms=now() + 60_000), 403, "no_match"),
+        ("legacy shape, stale", secret, token, lambda: ev(ts_ms=now() - 60_000, legacy=True), 403, "no_match"),
     ]
     if token is not None:
-        cases.append(("wrong alarm token",   secret, "0" * len(token), ev(), 403, "no_match"))
-        cases.append(("missing alarm token", secret, None, ev(), 403, "no_match"))
+        cases.append(("wrong alarm token",   secret, "0" * len(token), lambda: ev(), 403, "no_match"))
+        cases.append(("missing alarm token", secret, None, lambda: ev(), 403, "no_match"))
     if args.key_checked:
-        cases.append(("wrong trigger key",   secret, token, ev(key_="motion"), 403, "no_match"))
+        cases.append(("wrong trigger key",   secret, token, lambda: ev(key_="motion"), 403, "no_match"))
     if args.field and args.value is not None:
-        cases.append(("other button",        secret, token, ev(value="not-a-configured-button"), 403, "no_match"))
+        cases.append(("other button",        secret, token, lambda: ev(value="not-a-configured-button"), 403, "no_match"))
     if args.field2 and args.value2 is not None:
-        cases.append(("other gesture",       secret, token, ev(value2="not-a-configured-gesture"), 403, "no_match"))
+        cases.append(("other gesture",       secret, token, lambda: ev(value2="not-a-configured-gesture"), 403, "no_match"))
 
-    # Everything valid. With the rule's action disabled in the ACL this is
-    # acl_denied; with it enabled it is ack and THE LOCK WILL MOVE.
-    valid = ev(ts_ms=now(), event_id=uuid.uuid4().hex[:24])
+    # Everything valid. With the rule's action unticked in the ACL this is
+    # acl_denied; with it ticked it is ack and THE LOCK WILL MOVE. The replay
+    # must resend the very same body.
+    sent = {}
+    def valid():
+        sent["valid"] = ev(ts_ms=now(), event_id=uuid.uuid4().hex[:24])
+        return sent["valid"]
+    # Live: the action is still pending right after the ack, so the board may
+    # answer 503 busy (checked before replay/cooldown) instead of 429.
+    after_valid = ("cooldown", "busy") if args.live else ("cooldown",)
+    after_status = (429, 503) if args.live else (429,)
     cases += [
         ("valid press",       secret, token, valid, 200 if args.live else 403,
-                                                    "ack" if args.live else "acl_denied"),
-        ("replay same press", secret, token, valid, 429, "cooldown"),
-        ("new press < 10 s",  secret, token, ev(), 429, "cooldown"),
+                                             "ack" if args.live else "acl_denied"),
+        ("replay same press", secret, token, lambda: sent["valid"], after_status, after_valid),
+        (f"new press < {cooldown_s:g} s", secret, token, lambda: ev(), after_status, after_valid),
     ]
-
-    if args.live:
-        print("LIVE MODE: the 'valid press' case will actuate the lock.")
-        if input("Type 'unlock' to continue: ").strip() != "unlock":
-            return 1
+    if args.token2:
+        if args.live:
+            print("Note: skipping the --token2 case in live mode (the first action is still pending).")
+        else:
+            # Cooldown is per rule: another rule right after is accepted (and
+            # then refused by the ACL, since its action is unticked too).
+            cases.append(("other rule in cooldown", secret, args.token2,
+                          lambda: ev(value=args.rule2_value, value2=args.rule2_value2), 403, "acl_denied"))
 
     failures = 0
+    valid_sent_at = None
     for name, sec, tok, body, want_status, want_result in cases:
-        status, resp = post(url, sec, body, token=tok)
+        want_status = want_status if isinstance(want_status, tuple) else (want_status,)
+        want_result = want_result if isinstance(want_result, tuple) else (want_result,)
+        if valid_sent_at is not None and time.monotonic() - valid_sent_at > cooldown_s:
+            print(f"WARN  more than {cooldown_s:g} s since the valid press; cooldown cases may not apply")
+        status, resp = post(url, sec, body(), token=tok)
+        if body is valid:
+            valid_sent_at = time.monotonic()
         result = resp.get("result") if isinstance(resp, dict) else resp
-        ok = status == want_status and result == want_result
+        ok = status in want_status and result in want_result
         failures += not ok
-        print(f"{'PASS' if ok else 'FAIL'}  {name:<20} -> {status} {result}"
-              + ("" if ok else f"   (expected {want_status} {want_result})"))
+        print(f"{'PASS' if ok else 'FAIL'}  {name:<22} -> {status} {result}"
+              + ("" if ok else f"   (expected {'/'.join(map(str, want_status))} {'/'.join(want_result)})"))
         time.sleep(0.2)
 
     print(f"\n{len(cases) - failures}/{len(cases)} passed")
     if failures:
-        print("Hints: 503 no_time = board has no NTP time yet; "
+        print("Hints: 503 no_time = board has no NTP time yet; 503 busy = a lock action was still pending; "
               "403 denied on every case = source IP not allowed or secret mismatch.")
     return 1 if failures else 0
 
@@ -222,6 +259,14 @@ def main():
         if name == "suite":
             s.add_argument("--live", action="store_true",
                            help="expect 200 ack for the valid case (lock moves)")
+            s.add_argument("--acl-disabled", action="store_true",
+                           help="confirm the rule's action is unticked in Nuki Lock Access Control "
+                                "(otherwise you are asked)")
+            s.add_argument("--cooldown-ms", type=int, default=10000,
+                           help="PROTECT_WEBHOOK_COOLDOWN_MS of the board (default 10000)")
+            s.add_argument("--token2", help="token of a second rule, to check per-rule cooldown")
+            s.add_argument("--rule2-value", help="button of the second rule (default: --value)")
+            s.add_argument("--rule2-value2", help="gesture of the second rule (default: --value2)")
         s.set_defaults(func=func)
 
     args = p.parse_args()

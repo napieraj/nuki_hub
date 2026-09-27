@@ -92,7 +92,10 @@ One alarm per rule (e.g. "Fob A - Hold Right", "Fob A - Press Right"):
   `Lock action expired`, so the door never opens long after the press.
 
 ### 5. Bench test without moving the lock
-1. In **Nuki Lock Access Control**, untick the action the rule uses.
+1. In **Nuki Lock Access Control**, untick the action the rule uses (and the
+   second rule's action, if you pass `--token2`). If it stays ticked, the
+   "valid press" case really moves the lock; the tool asks unless you pass
+   `--acl-disabled`.
 2. Allow your laptop as source: run from a host with the console's IP, or
    flash a bench build with `PROTECT_WEBHOOK_SOURCE_IP` set to the laptop.
    Do not keep that build.
@@ -100,13 +103,17 @@ One alarm per rule (e.g. "Fob A - Hold Right", "Fob A - Press Right"):
    ```
    scripts/protect_webhook_test.py suite --url http://<board-ip>/protect --bearer \
      --secret <secret> --token <rule token> --device <fob MAC> \
-     --key-checked --field button --value right --field2 value --value2 longPress
+     --key-checked --field button --value right --field2 value --value2 longPress \
+     --token2 <press-right token> --rule2-value2 press --acl-disabled
    ```
-   Expected: **16/16 PASS**. Rejections cover a wrong secret, bad JSON, missing
-   triggers, an oversized body, another fob, stale and future timestamps, a stale
-   legacy-shape payload, a wrong or missing alarm token, a wrong key, another
-   button, another gesture, replay, and cooldown. The fully valid press returns
-   **`403 acl_denied`**: it passed every check and only the ACL stopped it.
+   Expected: **17/17 PASS** (16 without `--token2`). Rejections cover a wrong
+   secret, bad JSON, missing triggers, an oversized body, another fob, stale and
+   future timestamps, a stale legacy-shape payload, a wrong or missing alarm token,
+   a wrong key, another button, another gesture, replay, and cooldown. The fully
+   valid press returns **`403 acl_denied`**: it passed every check and only the
+   ACL stopped it. The `--token2` case checks that another rule is accepted inside
+   the first rule's cooldown (also `403 acl_denied`). Pass `--cooldown-ms` if you
+   changed `PROTECT_WEBHOOK_COOLDOWN_MS`.
 4. Tick the action again, hold the real fob button, and watch the Nuki Hub
    log (USB-C serial) for `Protect webhook: unlock -> queued`.
 
