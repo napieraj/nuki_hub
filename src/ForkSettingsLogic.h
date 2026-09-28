@@ -27,6 +27,10 @@ namespace ForkSettingsLogic
     constexpr size_t LEN_DEVICE = 23; // "AA:BB:CC:DD:EE:FF" is 17
     constexpr size_t LEN_ACTION = 15;
     constexpr size_t LEN_IP = 15;
+    // Embedded lock MQTT server: the Nuki app allows up to 32 characters.
+    constexpr size_t LEN_MQTT_USER = 32;
+    constexpr size_t LEN_MQTT_PASS = 32;
+    constexpr size_t LEN_MQTT_CLIENT_ID = 32;
 
     struct Range
     {
@@ -41,6 +45,9 @@ namespace ForkSettingsLogic
     constexpr Range BLE_STALL_MS = { 5000, 600000, 30000 };
     // A relay closed for minutes (typo, wrong unit) would hold a door open.
     constexpr Range RELAY_PULSE_MS = { 100, 30000, 3000 };
+    // Redundant-action skip: the lock must have been heard from (any MQTT
+    // packet) within this. The Nuki lock pings every 300 s (keepalive k300).
+    constexpr Range LOCK_SILENCE_MS = { 10000, 900000, 330000 };
 
     // Nuki Hub lock actions (NukiHelper::lockActionToEnum), canonical spelling.
     constexpr const char* LOCK_ACTIONS[] = {
@@ -83,6 +90,15 @@ namespace ForkSettingsLogic
         uint8_t lockDi;               // 0 = off; 1..8: saving needs DIn active
 
         Rule rules[MAX_RULES];
+
+        // Embedded MQTT server for the Nuki lock (NUKI_HUB_EMBEDDED_LOCK_MQTT;
+        // stored in every build so the blob is the same everywhere).
+        bool lockMqttEnabled;                           // off by default
+        char lockMqttUser[LEN_MQTT_USER + 1];
+        char lockMqttPass[LEN_MQTT_PASS + 1];           // write-only on the page
+        char lockMqttClientId[LEN_MQTT_CLIENT_ID + 1];  // "" = any client ID
+        bool skipRedundant;                             // skip lock/unlock the lock already is in
+        uint32_t lockSilenceMs;                         // skip only if the lock was heard from within this
     };
 
     // What the board offers; validation rejects relayN / DIn beyond it.
@@ -106,6 +122,8 @@ namespace ForkSettingsLogic
         s.bleStallMs = BLE_STALL_MS.def;
         s.relayPulseMs = RELAY_PULSE_MS.def;
         s.relayCount = MAX_RELAYS;
+        s.skipRedundant = true;
+        s.lockSilenceMs = LOCK_SILENCE_MS.def;
     }
 
     // Values left over from ProtectWebhookConfig.h.example ("replace-with-...").
@@ -293,6 +311,19 @@ namespace ForkSettingsLogic
         return true;
     }
 
+    // Printable ASCII (MQTT user name, password, client ID as typed in the Nuki app).
+    inline bool isPrintableAscii(const char* s)
+    {
+        for(const char* p = s; *p; p++)
+        {
+            if(*p < 0x20 || *p > 0x7e)
+            {
+                return false;
+            }
+        }
+        return true;
+    }
+
     // Canonical action name for a lock action (case-insensitive) or
     // "relay1".."relayN" with N <= relayCount; nullptr if unknown.
     inline const char* canonicalAction(const char* action, uint8_t relayCount)
@@ -404,6 +435,32 @@ namespace ForkSettingsLogic
         return true;
     }
 
+    inline bool validateLockMqtt(const Settings& s, char* err, size_t errLen)
+    {
+        if(!inRange(s.lockSilenceMs, LOCK_SILENCE_MS))
+        {
+            snprintf(err, errLen, "Lock MQTT: 'heard from within' must be %u-%u ms", (unsigned)LOCK_SILENCE_MS.min,
+                     (unsigned)LOCK_SILENCE_MS.max);
+            return false;
+        }
+        if(!isPrintableAscii(s.lockMqttUser) || !isPrintableAscii(s.lockMqttPass) || !isPrintableAscii(s.lockMqttClientId))
+        {
+            snprintf(err, errLen, "Lock MQTT: user name, password and client ID may only contain printable ASCII");
+            return false;
+        }
+        if(strchr(s.lockMqttClientId, ' ') != nullptr)
+        {
+            snprintf(err, errLen, "Lock MQTT: the client ID can't contain spaces");
+            return false;
+        }
+        if(s.lockMqttEnabled && (!isSet(s.lockMqttUser) || !isSet(s.lockMqttPass)))
+        {
+            snprintf(err, errLen, "Lock MQTT: set a user name and a password (the same as in the Nuki app) to enable it");
+            return false;
+        }
+        return true;
+    }
+
     // The same checks as the old build-time checks of ProtectWebhookConfig.h,
     // plus ranges. Disabled rules are drafts and not checked.
     inline bool validate(const Settings& s, const Caps& caps, char* err, size_t errLen)
@@ -474,17 +531,20 @@ namespace ForkSettingsLogic
                 return false;
             }
         }
-        return true;
+        return validateLockMqtt(s, err, errLen);
     }
 
     // --- NVS format: one blob, so a save is all-or-nothing -----------------
     // "FS", version, then the fields in order; strings are u8 length + bytes.
 
-    constexpr uint8_t BLOB_VERSION = 1;
+    // Version 2 appends the lock MQTT section; version 1 blobs still load
+    // (lock MQTT off, defaults).
+    constexpr uint8_t BLOB_VERSION = 2;
 
     constexpr size_t MAX_BLOB_SIZE =
         3 + 1 + (1 + LEN_SECRET) + (1 + LEN_IP) + 5 * 4 + 1 + 1 + 1 + 1 +
-        MAX_RULES * (1 + (1 + LEN_NAME) + (1 + LEN_TOKEN) + 5 * (1 + LEN_TEXT) + (1 + LEN_DEVICE) + (1 + LEN_ACTION));
+        MAX_RULES * (1 + (1 + LEN_NAME) + (1 + LEN_TOKEN) + 5 * (1 + LEN_TEXT) + (1 + LEN_DEVICE) + (1 + LEN_ACTION)) +
+        1 + (1 + LEN_MQTT_USER) + (1 + LEN_MQTT_PASS) + (1 + LEN_MQTT_CLIENT_ID) + 4;
 
     class Writer
     {
@@ -595,6 +655,11 @@ namespace ForkSettingsLogic
             w.str(r.value2);
             w.str(r.action);
         }
+        w.u8((uint8_t)((s.lockMqttEnabled ? 1 : 0) | (s.skipRedundant ? 2 : 0)));
+        w.str(s.lockMqttUser);
+        w.str(s.lockMqttPass);
+        w.str(s.lockMqttClientId);
+        w.u32(s.lockSilenceMs);
         return w.length();
     }
 
@@ -605,7 +670,7 @@ namespace ForkSettingsLogic
         setDefaults(s);
         Reader r(buf, len);
         uint8_t m1, m2, ver, flags, slots;
-        if(!r.u8(m1) || !r.u8(m2) || !r.u8(ver) || m1 != 'F' || m2 != 'S' || ver != BLOB_VERSION)
+        if(!r.u8(m1) || !r.u8(m2) || !r.u8(ver) || m1 != 'F' || m2 != 'S' || ver < 1 || ver > BLOB_VERSION)
         {
             return false;
         }
@@ -634,6 +699,18 @@ namespace ForkSettingsLogic
             {
                 return false;
             }
+        }
+        if(ver >= 2)
+        {
+            uint8_t lockFlags;
+            if(!r.u8(lockFlags) || lockFlags > 3 || !r.str(s.lockMqttUser, sizeof(s.lockMqttUser)) ||
+               !r.str(s.lockMqttPass, sizeof(s.lockMqttPass)) || !r.str(s.lockMqttClientId, sizeof(s.lockMqttClientId)) ||
+               !r.u32(s.lockSilenceMs))
+            {
+                return false;
+            }
+            s.lockMqttEnabled = lockFlags & 1;
+            s.skipRedundant = lockFlags & 2;
         }
         if(!r.atEnd())
         {

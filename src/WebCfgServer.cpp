@@ -912,6 +912,7 @@ void WebCfgServer::initialize()
             {
                 return buildNetworkConfigHtml(request, resp);
             }
+#ifndef NUKI_HUB_NO_EXTERNAL_MQTT
             else if (value == "mqttconfig")
             {
                 return buildMqttConfigHtml(request, resp);
@@ -928,6 +929,7 @@ void WebCfgServer::initialize()
             {
                 return buildMqttSSLConfigHtml(request, resp, 2);
             }
+#endif
             else if (value == "httpcrtconfig")
             {
                 return buildHttpSSLConfigHtml(request, resp, 1);
@@ -5077,7 +5079,9 @@ esp_err_t WebCfgServer::buildHtml(PsychicRequest *request, PsychicResponse* resp
     response.print("<h3>Info</h3><br>");
     response.print("<table>");
     printParameter(&response, "Hostname", _hostname.c_str(), "", "hostname");
+#ifndef NUKI_HUB_NO_EXTERNAL_MQTT
     printParameter(&response, "MQTT Connected", _network->mqttConnectionState() > 0 ? "Yes" : "No", "", "mqttState");
+#endif
     if(_nuki != nullptr)
     {
         char lockStateArr[20];
@@ -5126,7 +5130,9 @@ esp_err_t WebCfgServer::buildHtml(PsychicRequest *request, PsychicResponse* resp
 
     response.print("<ul id=\"tblnav\">");
     buildNavigationMenuEntry(&response, "Network Configuration", "/get?page=ntwconfig");
+#ifndef NUKI_HUB_NO_EXTERNAL_MQTT
     buildNavigationMenuEntry(&response, "MQTT Configuration", "/get?page=mqttconfig",  _brokerConfigured ? "" : "Please configure MQTT broker");
+#endif
     buildNavigationMenuEntry(&response, "Nuki Configuration", "/get?page=nukicfg");
     buildNavigationMenuEntry(&response, "Access Level Configuration", "/get?page=acclvl");
     buildNavigationMenuEntry(&response, "Credentials", "/get?page=cred");
@@ -5328,7 +5334,9 @@ esp_err_t WebCfgServer::buildNetworkConfigHtml(PsychicRequest *request, PsychicR
     response.print("<table>");
     printInputField(&response, "HOSTNAME", "Hostname (needs to be unique)", _preferences->getString(preference_hostname).c_str(), 100, "");
     printDropDown(&response, "NWHW", "Network hardware", String(_preferences->getInt(preference_network_hardware)), getNetworkDetectionOptions(), "");
+#ifndef NUKI_HUB_NO_EXTERNAL_MQTT
     printInputField(&response, "HASSCUURL", "Home Assistant device configuration URL (empty to use http://LOCALIP; fill when using a reverse proxy for example)", _preferences->getString(preference_mqtt_hass_cu_url).c_str(), 261, "");
+#endif
 #if !defined(CONFIG_IDF_TARGET_ESP32H2) && !defined(NUKI_HUB_NO_WIFI)
     printInputField(&response, "RSSI", "RSSI Publish interval (seconds; -1 to disable)", _preferences->getInt(preference_rssi_publish_interval), 6, "");
 #endif

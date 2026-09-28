@@ -2,7 +2,43 @@
 #include "NetworkDevice.h"
 #include "../Logger.h"
 
-#ifndef NUKI_HUB_UPDATER
+#if !defined(NUKI_HUB_UPDATER) && defined(NUKI_HUB_NO_EXTERNAL_MQTT)
+// No MQTT client in this build (the Nuki lock talks to the embedded server,
+// LockMqttServer). Every MQTT call is a no-op that reports "not connected";
+// espMqttClient is not linked. The web serial log still works.
+#include "PreferencesKeys.h"
+
+void NetworkDevice::init()
+{
+    _useEncryption = false;
+    _mqttEnabled = false;
+    if(_preferences->getBool(preference_webserial_enabled, false))
+    {
+        Log = new MqttLogger(MqttLoggerMode::SerialAndWeb);
+    }
+}
+
+void NetworkDevice::update() {}
+bool NetworkDevice::isEncrypted() { return false; }
+bool NetworkDevice::mqttConnect() { return false; }
+bool NetworkDevice::mqttDisconnect(bool force) { return false; }
+void NetworkDevice::mqttDisable() { _mqttEnabled = false; }
+void NetworkDevice::mqttRestart() {}
+bool NetworkDevice::mqttConnected() const { return false; }
+uint16_t NetworkDevice::mqttPublish(const char* topic, uint8_t qos, bool retain, const char* payload) { return 0; }
+uint16_t NetworkDevice::mqttPublish(const char* topic, uint8_t qos, bool retain, const uint8_t* payload, size_t length) { return 0; }
+uint16_t NetworkDevice::mqttSubscribe(const char* topic, uint8_t qos) { return 0; }
+void NetworkDevice::mqttSetServer(const char* host, uint16_t port) {}
+void NetworkDevice::mqttSetClientId(const char* clientId) {}
+void NetworkDevice::mqttSetCleanSession(bool cleanSession) {}
+void NetworkDevice::mqttSetKeepAlive(uint16_t keepAlive) {}
+void NetworkDevice::mqttSetWill(const char* topic, uint8_t qos, bool retain, const char* payload) {}
+void NetworkDevice::mqttSetCredentials(const char* username, const char* password) {}
+void NetworkDevice::mqttOnMessage(espMqttClientTypes::OnMessageCallback callback) {}
+void NetworkDevice::mqttOnConnect(espMqttClientTypes::OnConnectCallback callback) {}
+void NetworkDevice::mqttOnDisconnect(espMqttClientTypes::OnDisconnectCallback callback) {}
+MqttClient* NetworkDevice::getMqttClient() const { return nullptr; }
+#elif !defined(NUKI_HUB_UPDATER)
 #include "FS.h"
 #include "SPIFFS.h"
 #include "../MqttTopics.h"

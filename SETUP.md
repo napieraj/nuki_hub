@@ -9,6 +9,7 @@ All names, addresses and keys below are invented examples.
 USL-FOB ─SuperLink─▶ gateway ─▶ Protect Alarm Manager (one alarm per button + gesture)
    ─ POST http://<board>/protect?r=<token>, Authorization: Bearer <secret> ─▶
 Waveshare ESP32-S3-POE-ETH-8DI-8RO (Ethernet only) ─ BLE ─▶ Nuki Lock Ultra
+                         ◀── MQTT, port 1883 (optional, step 9b) ── lock's Wi-Fi
 ```
 
 ### 0. What you need
@@ -93,9 +94,11 @@ disabled on purpose.
    - **Nuki Configuration:** "Update Nuki Hub and Lock/Opener time using NTP" is
      switched on by the build; set the **NTP server** there if your DHCP doesn't
      hand one out (see step 8).
-   - **MQTT:** leave empty. Nothing here needs a broker.
-   - **Do not enable HTTPS.** Protect rejects self-signed certificates and doesn't
-     follow redirects.
+   - **MQTT:** there is nothing to configure: this build has no MQTT client and
+     no MQTT pages. The lock's MQTT connection (step 9b) is set up on the
+     Protect Webhook & Relays page.
+   - **HTTPS** is not built in: Protect rejects self-signed certificates and
+     doesn't follow redirects.
 
 ### 6. Pair the lock
 1. In the Nuki app: **Settings → Features & Configuration → Button and LED →
@@ -111,8 +114,10 @@ disabled on purpose.
    list; GPIO inputs don't.
 
 Upstream recommends Hybrid mode (Thread/Wi-Fi + Nuki MQTT) for the Ultra. This
-setup doesn't use it: lock actions work without it, but state changes made at the
-lock (keypad, turning by hand) only show up at the next status poll.
+build runs it against a small MQTT server of its own, no broker needed (step
+9b). Without it lock actions still work over BLE, but they are slower and state
+changes made at the lock (keypad, turning by hand) only show up at the next
+status poll.
 
 ### 7. Confirm what a fob press looks like (once, 5 minutes)
 1. On your computer: `scripts/protect_webhook_test.py listen --port 8099`
@@ -164,6 +169,36 @@ Optional hardening on the same page (all off by default, one line of help each):
 *Settings lock* (saving only while a DI input you wired is active). Recovery
 over USB-C serial: `forkcfg unlock`, `forkcfg off`. Details: `PROTECT_SETUP.md`.
 
+### 9b. Let the lock connect over MQTT (optional, recommended)
+Faster lock actions and live lock state. The lock uses its own Wi-Fi and
+connects to the board's IP on port 1883. Details: `PROTECT_SETUP.md` 2b and
+`WAVESHARE.md` "Nuki lock MQTT".
+1. The lock must be on your Wi-Fi (Nuki app: the lock → Settings → Features &
+   Configuration → Wi-Fi) and able to reach `<board-ip>` TCP 1883 (firewall:
+   allow the lock → board 1883; the lock only connects to private LAN
+   addresses).
+2. On **Protect Webhook & Relays → Nuki lock MQTT**: tick **Enable the lock MQTT
+   server**, set a user name (e.g. `nukilock`) and a password (*Generate
+   random*, copy it), Save.
+3. Nuki app: the lock → Settings → **Features & Configuration → Smart Home →
+   MQTT**: switch MQTT on, **host = the board's IP** (no `http://`, no port),
+   the same user name and password, **Allow locking: on**, **Auto discovery:
+   off**. Save; the app shows a green check once connected.
+4. Reload the page. It should show **Lock connected: yes** (client `Nuki_…`)
+   and **Lock actions go over: MQTT, BLE if the lock doesn't confirm within 2
+   s**. If it says "BLE until the next reboot", reboot the board once (hybrid
+   mode was off). Optionally copy the shown client ID into **Expected client
+   ID** and save.
+5. In the USB log: `Lock MQTT: lock connected (...)` and `Lock MQTT: lock
+   subscribed to nuki/<ID>/lockAction (QoS 2): lock actions go over MQTT`. A
+   fob press then logs `Lock MQTT: lockAction 1 sent` and `Protect timing:
+   unlock via MQTT, lock confirmed (lockActionEvent) N ms after the webhook`.
+6. Nothing else to set in Nuki Hub: enabling the server switches on its hybrid
+   settings (hybrid mode, actions through official MQTT, retry over BLE).
+   Consider raising the lock state poll interval (Advanced Nuki Configuration)
+   to save the lock's battery; the lock now reports its state itself.
+   Wi-Fi costs the lock battery too (Nuki: remote access shortens battery life).
+
 ### 10. Create the real alarms in Protect
 One alarm per rule, e.g. "Fob A - Hold Right" and "Fob A - Press Right":
 - Trigger: **Button**, the gesture (**Long Press (3s)** or **Press**), scope the fob's **Right** button.
@@ -211,10 +246,12 @@ One alarm per rule, e.g. "Fob A - Hold Right" and "Fob A - Press Right":
 ### Checklist
 - [ ] Builds with `SUCCESS`
 - [ ] Flashed; web UI reachable at a reserved IP
-- [ ] Credentials + TOTP/Duo set; HTTPS off
+- [ ] Credentials + TOTP/Duo set
 - [ ] Lock paired ("Paired: Yes"), ACL allows only the needed actions
 - [ ] Payload captured once and rules match it
 - [ ] Board has NTP (no `503 no_time`); firewall allows only the console on port 80
 - [ ] Webhook configured on the web page: status "Active", clock "Synced"
 - [ ] Protect alarms created with Bearer auth and per-alarm tokens
 - [ ] Bench suite 17/17, then a real fob press unlocks and locks
+- [ ] Optional: lock connected over MQTT ("Lock connected: yes"), a press logs
+      `via MQTT, lock confirmed`; switching MQTT off in the app falls back to BLE

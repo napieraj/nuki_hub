@@ -71,6 +71,9 @@ namespace ForkSettings
     // again at the next boot).
     void factoryReset();
 
+    // Incremented by every load or save (cheap change check for other tasks).
+    uint32_t generation();
+
     // The webhook holds this for one request.
     class ReadLock
     {

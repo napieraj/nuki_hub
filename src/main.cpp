@@ -14,6 +14,9 @@
 #include "WaveshareBoard.h"
 #include "ProtectWebhook.h"
 #include "ForkSettings.h"
+#ifdef NUKI_HUB_EMBEDDED_LOCK_MQTT
+#include "LockMqttServer.h"
+#endif
 #include "esp32-hal-log.h"
 #include "esp32-hal-bt-mem.h"
 #include "hal/wdt_hal.h"
@@ -1423,7 +1426,10 @@ void setupTasks(bool ota)
 
     if(ota)
     {
+#ifndef NUKI_HUB_WAVESHARE_8DI8RO
+        // (Not reached on this board: doOta is never set, updates are USB-only.)
         xTaskCreatePinnedToCore(otaTask, "ota", 8192, NULL, 2, &otaTaskHandle, (espCores > 1) ? 1 : 0);
+#endif
     }
     else
     {
@@ -1587,6 +1593,10 @@ void setup()
 #endif
 #ifdef NUKI_HUB_PROTECT_WEBHOOK
     ForkSettings::begin();
+#endif
+#ifdef NUKI_HUB_EMBEDDED_LOCK_MQTT
+    // Before the lock objects read the hybrid settings.
+    LockMqttServer::syncHybridPreferences(preferences);
 #endif
     initializeRestartReason();
 
@@ -1824,6 +1834,9 @@ void setup()
 
         nuki = new NukiWrapper("NukiHub", deviceIdLock, bleScanner, networkLock, nukiOfficial, gpio, preferences, CharBuffer::get(), buffer_size);
         nuki->initialize();
+#ifdef NUKI_HUB_EMBEDDED_LOCK_MQTT
+        LockMqttServer::begin(networkLock, preferences);
+#endif
     }
 
     Log->println(openerEnabled ? F("Nuki Opener enabled") : F("Nuki Opener disabled"));

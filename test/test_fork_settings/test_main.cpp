@@ -270,6 +270,96 @@ void test_serialize_round_trip()
     TEST_ASSERT_LESS_THAN(900, (int)n);
 }
 
+void test_lock_mqtt_settings()
+{
+    Settings s;
+    setDefaults(s);
+    TEST_ASSERT_FALSE(s.lockMqttEnabled);
+    TEST_ASSERT_TRUE(s.skipRedundant);
+    TEST_ASSERT_EQUAL_UINT32(LOCK_SILENCE_MS.def, s.lockSilenceMs);
+    TEST_ASSERT_TRUE(validate(s, WAVESHARE, err, sizeof(err)));
+
+    // Enabling needs user name and password.
+    s.lockMqttEnabled = true;
+    TEST_ASSERT_FALSE(validate(s, WAVESHARE, err, sizeof(err)));
+    strcpy(s.lockMqttUser, "nukilock");
+    TEST_ASSERT_FALSE(validate(s, WAVESHARE, err, sizeof(err)));
+    strcpy(s.lockMqttPass, "pass word 1");
+    TEST_ASSERT_TRUE(validate(s, WAVESHARE, err, sizeof(err)));
+    strcpy(s.lockMqttClientId, "Nuki_2BB28570");
+    TEST_ASSERT_TRUE(validate(s, WAVESHARE, err, sizeof(err)));
+    strcpy(s.lockMqttClientId, "Nuki 2BB28570");
+    TEST_ASSERT_FALSE(validate(s, WAVESHARE, err, sizeof(err)));
+    strcpy(s.lockMqttClientId, "");
+    strcpy(s.lockMqttPass, "tab\there");
+    TEST_ASSERT_FALSE(validate(s, WAVESHARE, err, sizeof(err)));
+    strcpy(s.lockMqttPass, "caf\xc3\xa9");
+    TEST_ASSERT_FALSE(validate(s, WAVESHARE, err, sizeof(err)));
+    strcpy(s.lockMqttPass, "ok");
+
+    s.lockSilenceMs = LOCK_SILENCE_MS.min - 1;
+    TEST_ASSERT_FALSE(validate(s, WAVESHARE, err, sizeof(err)));
+    s.lockSilenceMs = LOCK_SILENCE_MS.max + 1;
+    TEST_ASSERT_FALSE(validate(s, WAVESHARE, err, sizeof(err)));
+    s.lockSilenceMs = LOCK_SILENCE_MS.max;
+    TEST_ASSERT_TRUE(validate(s, WAVESHARE, err, sizeof(err)));
+
+    // Disabled: the fields may stay empty, and a stored user name is kept.
+    s.lockMqttEnabled = false;
+    s.lockMqttPass[0] = 0;
+    TEST_ASSERT_TRUE(validate(s, WAVESHARE, err, sizeof(err)));
+
+    // Round trip.
+    s.lockMqttEnabled = true;
+    strcpy(s.lockMqttPass, "s3cret");
+    strcpy(s.lockMqttClientId, "Nuki_2BB28570");
+    s.skipRedundant = false;
+    s.lockSilenceMs = 60000;
+    static uint8_t buf[MAX_BLOB_SIZE];
+    const size_t n = serialize(s, buf, sizeof(buf));
+    Settings t;
+    setDefaults(t);
+    TEST_ASSERT_TRUE(deserialize(buf, n, t));
+    TEST_ASSERT_TRUE(t.lockMqttEnabled);
+    TEST_ASSERT_FALSE(t.skipRedundant);
+    TEST_ASSERT_EQUAL_STRING("nukilock", t.lockMqttUser);
+    TEST_ASSERT_EQUAL_STRING("s3cret", t.lockMqttPass);
+    TEST_ASSERT_EQUAL_STRING("Nuki_2BB28570", t.lockMqttClientId);
+    TEST_ASSERT_EQUAL_UINT32(60000, t.lockSilenceMs);
+
+    // Bad lock flags byte.
+    const size_t flagsAt = n - 4 - (1 + strlen("Nuki_2BB28570")) - (1 + strlen("s3cret")) - (1 + strlen("nukilock")) - 1;
+    TEST_ASSERT_EQUAL_UINT8(1, buf[flagsAt]);
+    buf[flagsAt] = 4;
+    TEST_ASSERT_FALSE(deserialize(buf, n, t));
+}
+
+void test_version1_blob_still_loads()
+{
+    // What the previous firmware stored: version 1, no lock MQTT section.
+    Settings s = valid();
+    static uint8_t buf[MAX_BLOB_SIZE];
+    size_t n = serialize(s, buf, sizeof(buf));
+    const size_t tail = 1 + 1 + 1 + 1 + 4; // flags, three empty strings, u32
+    n -= tail;
+    buf[2] = 1;
+    Settings t;
+    setDefaults(t);
+    t.lockMqttEnabled = true; // must be overwritten by the defaults
+    TEST_ASSERT_TRUE(deserialize(buf, n, t));
+    TEST_ASSERT_EQUAL_MEMORY(&s.rules, &t.rules, sizeof(s.rules));
+    TEST_ASSERT_EQUAL_STRING(s.secret, t.secret);
+    TEST_ASSERT_FALSE(t.lockMqttEnabled);
+    TEST_ASSERT_TRUE(t.skipRedundant);
+    TEST_ASSERT_EQUAL_UINT32(LOCK_SILENCE_MS.def, t.lockSilenceMs);
+    // Version 1 with a version 2 tail, and unknown versions, are refused.
+    TEST_ASSERT_FALSE(deserialize(buf, n + tail, t));
+    buf[2] = 3;
+    TEST_ASSERT_FALSE(deserialize(buf, n, t));
+    buf[2] = 0;
+    TEST_ASSERT_FALSE(deserialize(buf, n, t));
+}
+
 void test_serialize_worst_case_fits()
 {
     Settings s;
@@ -289,6 +379,10 @@ void test_serialize_worst_case_fits()
         memset(r.action, 'a', LEN_ACTION);
     }
     memset(s.sourceIp, '1', LEN_IP);
+    s.lockMqttEnabled = true;
+    memset(s.lockMqttUser, 'u', LEN_MQTT_USER);
+    memset(s.lockMqttPass, 'p', LEN_MQTT_PASS);
+    memset(s.lockMqttClientId, 'c', LEN_MQTT_CLIENT_ID);
     static uint8_t buf[MAX_BLOB_SIZE];
     TEST_ASSERT_EQUAL(MAX_BLOB_SIZE, serialize(s, buf, sizeof(buf)));
     TEST_ASSERT_EQUAL(0, (int)serialize(s, buf, sizeof(buf) - 1));
@@ -465,6 +559,8 @@ int main()
     RUN_TEST(test_ranges);
     RUN_TEST(test_serialize_round_trip);
     RUN_TEST(test_serialize_worst_case_fits);
+    RUN_TEST(test_lock_mqtt_settings);
+    RUN_TEST(test_version1_blob_still_loads);
     RUN_TEST(test_deserialize_rejects_damage);
     RUN_TEST(test_write_only_fields);
     RUN_TEST(test_text_and_numbers);

@@ -23,6 +23,11 @@
 #include "Logger.h"
 #include "Gpio.h"
 #include "WaveshareBoard.h"
+#ifdef NUKI_HUB_EMBEDDED_LOCK_MQTT
+#include "LockMqttServer.h"
+#include "LockMqttLogic.h"
+#include "../lib/nuki_ble/src/NukiLockUtils.h"
+#endif
 #include <memory>
 #include <time.h>
 
@@ -171,6 +176,20 @@ namespace
         }
         return request->getParam(name)->value();
     }
+
+    String duration(int64_t ms)
+    {
+        const long s = (long)(ms / 1000);
+        if(s < 120)
+        {
+            return String(s) + " s";
+        }
+        if(s < 7200)
+        {
+            return String(s / 60) + " min";
+        }
+        return String(s / 3600) + " h " + String((s % 3600) / 60) + " min";
+    }
 }
 
 bool WebCfgServer::forkSettingsParse(PsychicRequest* request, Settings& s, char* err, size_t errLen)
@@ -231,6 +250,25 @@ bool WebCfgServer::forkSettingsParse(PsychicRequest* request, Settings& s, char*
         }
         s.lockDi = (uint8_t)v;
     }
+#ifdef NUKI_HUB_EMBEDDED_LOCK_MQTT
+    if(request->hasParam("FS_LM_SEEN"))
+    {
+        s.lockMqttEnabled = isParameterTrue(request, "FS_LM_EN");
+        s.skipRedundant = isParameterTrue(request, "FS_LM_SKIP");
+        if(!setTrimmed(s.lockMqttUser, sizeof(s.lockMqttUser), param(request, "FS_LM_USER").c_str()) ||
+           !setTrimmed(s.lockMqttClientId, sizeof(s.lockMqttClientId), param(request, "FS_LM_CID").c_str()) ||
+           !applyWriteOnly(s.lockMqttPass, sizeof(s.lockMqttPass), param(request, "FS_LM_PASS").c_str(), isParameterTrue(request, "FS_LM_PASS_CLR")))
+        {
+            snprintf(err, errLen, "Lock MQTT: user name, password and client ID are at most %u characters", (unsigned)LEN_MQTT_USER);
+            return false;
+        }
+        if(!parseUint(param(request, "FS_LM_SILENCE").c_str(), s.lockSilenceMs))
+        {
+            snprintf(err, errLen, "Lock MQTT: 'heard from within' must be a whole number of milliseconds");
+            return false;
+        }
+    }
+#endif
     s.bearerOnly = isParameterTrue(request, "FS_BEARER");
     s.requireSourceIp = isParameterTrue(request, "FS_REQIP");
     s.allowBroadRules = isParameterTrue(request, "FS_BROAD");
@@ -397,6 +435,92 @@ esp_err_t WebCfgServer::processForkSettings(PsychicRequest* request, PsychicResp
     return buildForkSettingsHtml(request, resp, nullptr, "Saved and applied.", false);
 }
 
+#ifdef NUKI_HUB_EMBEDDED_LOCK_MQTT
+void WebCfgServer::buildLockMqttSection(PsychicStreamResponse* response, const Settings& s, const Settings& stored)
+{
+    LockMqttServer::Status st;
+    LockMqttServer::status(st);
+
+    response->print("<h3>Nuki lock MQTT (official MQTT API, built-in server)</h3>");
+    response->print("<p>In the Nuki app (lock &rarr; Settings &rarr; Features &amp; Configuration &rarr; MQTT): "
+                    "host = this board's IP, the user name and password below, <b>Allow locking</b> on, "
+                    "<b>Home Assistant discovery</b> off. Only the lock can log in; Nuki Hub talks to it in-process. "
+                    "Lock actions go over MQTT while the lock is connected, otherwise over BLE.</p><table>");
+    String server = !st.enabled ? String("off") :
+                    st.listening ? "listening on port " + String((unsigned)LockMqttServer::PORT) :
+                    String("<span class=\"warning\">not listening (network not up yet?)</span>");
+    printParameter(response, "Server", server.c_str());
+    if(st.connected)
+    {
+        String conn = "<span style=\"color: green\">yes</span>, for " + duration(espMillis() - st.connectedSinceMs) +
+                      ", client '" + esc(st.clientId) + "' from " + String(st.peer) + ", keepalive " + String((unsigned)st.keepAliveS) + " s";
+        printParameter(response, "Lock connected", conn.c_str());
+        printParameter(response, "Last message from the lock", (duration(st.lastRxAgeMs) + " ago").c_str());
+        if(st.lockState >= 0)
+        {
+            char state[30] = {0};
+            NukiLock::lockstateToString((NukiLock::LockState)st.lockState, state);
+            String text = String(state) + " (reported " + duration(st.stateAgeMs) + " ago)";
+            if(st.doorState >= 0)
+            {
+                char door[30] = {0};
+                NukiLock::doorSensorStateToString((NukiLock::DoorSensorState)st.doorState, door);
+                text += ", door sensor: " + String(door);
+            }
+            printParameter(response, "Last state", text.c_str());
+        }
+        else
+        {
+            printParameter(response, "Last state", "none yet in this session");
+        }
+    }
+    else
+    {
+        printParameter(response, "Lock connected", st.enabled ? "no" : "no (server off)");
+    }
+    const char* actions = !st.connected ? "BLE (lock not connected)" :
+                          !st.lockActionSubscribed ? "BLE (the lock doesn't listen to lockAction: turn on 'Allow locking' in the Nuki app)" :
+                          !st.hybridReady ? "BLE until the next reboot (hybrid mode was off at boot)" :
+                          "MQTT, BLE if the lock doesn't confirm within 2 s";
+    printParameter(response, "Lock actions go over", actions);
+    String counts = String((unsigned long)st.sessions) + " sessions, " + String((unsigned long)st.takeovers) + " takeovers, " +
+                    String((unsigned long)st.refused) + " refused since boot";
+    printParameter(response, "Connections", counts.c_str());
+    if(st.lastRefusal[0] != 0)
+    {
+        printParameter(response, "Last refused", esc(st.lastRefusal).c_str());
+    }
+    if(st.stackFreeBytes > 0)
+    {
+        printParameter(response, "Server task stack unused", (String((unsigned long)st.stackFreeBytes) + " bytes").c_str());
+    }
+    response->print("</table><table>");
+    response->print("<input type=\"hidden\" name=\"FS_LM_SEEN\" value=\"1\">");
+    printCheckBox(response, "FS_LM_EN", "Enable the lock MQTT server (port 1883)", s.lockMqttEnabled, "");
+    printInputField(response, "FS_LM_USER", "User name (as in the Nuki app, max. 32)", esc(s.lockMqttUser).c_str(), LEN_MQTT_USER, "autocomplete=\"off\"");
+    printParameter(response, "Password", writeOnlyStatus(stored.lockMqttPass).c_str());
+    printInputField(response, "FS_LM_PASS", "New password (empty = keep; max. 32)", "", LEN_MQTT_PASS, "autocomplete=\"off\"");
+    printGenerateRow(response, "FS_LM_PASS", 12);
+    printCheckBox(response, "FS_LM_PASS_CLR", "Clear the password", false, "");
+    char hint[96];
+    const uint32_t nukiId = _preferences->getUInt(preference_nuki_id_lock, 0);
+    if(nukiId != 0)
+    {
+        char p[24];
+        LockMqttLogic::officialPath(nukiId, p, sizeof(p));
+        snprintf(hint, sizeof(hint), "Expected client ID (optional; the Nuki lock uses Nuki_&lt;ID&gt;, here Nuki_%s)", p + 5);
+    }
+    else
+    {
+        snprintf(hint, sizeof(hint), "Expected client ID (optional; the Nuki lock uses Nuki_&lt;Nuki ID in hex&gt;)");
+    }
+    printInputField(response, "FS_LM_CID", hint, esc(s.lockMqttClientId).c_str(), LEN_MQTT_CLIENT_ID, "");
+    printCheckBox(response, "FS_LM_SKIP", "Webhook: skip lock/unlock if the lock already is locked/unlocked (only while connected; never unlatch)", s.skipRedundant, "");
+    printInputField(response, "FS_LM_SILENCE", "Skip only if the lock was heard from within (ms, 10000-900000)", (int)s.lockSilenceMs, 6, "");
+    response->print("</table>");
+}
+#endif
+
 esp_err_t WebCfgServer::buildForkSettingsHtml(PsychicRequest* request, PsychicResponse* resp, const Settings* shown,
                                               const String& message, bool error)
 {
@@ -562,6 +686,10 @@ esp_err_t WebCfgServer::buildForkSettingsHtml(PsychicRequest* request, PsychicRe
         printInputField(&response, "FS_PULSE", "Relay pulse (100-30000)", (int)s.relayPulseMs, 5, "");
         response.print("</table>");
     }
+
+#ifdef NUKI_HUB_EMBEDDED_LOCK_MQTT
+    buildLockMqttSection(&response, s, *stored);
+#endif
 
     response.print("<h3>Hardening options</h3><table>");
     printCheckBox(&response, "FS_BEARER", "Bearer only: refuse the secret as ?k= in the URL (Protect: Auth = Bearer)", s.bearerOnly, "");

@@ -291,6 +291,9 @@ void NukiOfficial::onOfficialUpdateReceived(const char *topic, const char *value
         }
     }
 
+#ifdef NUKI_HUB_NO_EXTERNAL_MQTT
+    (void)publishBatteryJson; // only for nukihub/ topics (2 KB of stack)
+#else
     if(publishBatteryJson)
     {
         JsonDocument jsonBattery;
@@ -303,6 +306,7 @@ void NukiOfficial::onOfficialUpdateReceived(const char *topic, const char *value
         serializeJson(jsonBattery, _resbuf, sizeof(_resbuf));
         _publisher->publishString(mqtt_topic_battery_basic_json, _resbuf, true);
     }
+#endif
 }
 
 const bool NukiOfficial::getStatusUpdated()

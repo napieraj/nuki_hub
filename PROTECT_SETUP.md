@@ -7,7 +7,10 @@ All values below are placeholders. Background and sources: `FINDINGS.md`.
 USL-FOB ──SuperLink──▶ SuperLink Gateway ─▶ Protect Alarm Manager
    alarm: Button / Long Press (3s) / scope fob:right
         ──POST http://<board>/protect?r=<token>, Authorization: Bearer <secret>──▶ Nuki Hub ──BLE──▶ Nuki lock
+                                                                                  └─MQTT (lock's Wi-Fi session to this board)─▶
 ```
+With the built-in lock MQTT server (section 2b) actions go to the lock over its
+MQTT session while it is connected, and over BLE otherwise.
 
 ### Requirements
 - SuperLink Gateway (USL-Gateway or USL-G2-Gateway-HA), UniFi OS ≥ 5.1.11,
@@ -102,6 +105,32 @@ it the webhook starts switched off until you configure it on the page.
 
 In Nuki Hub → **Nuki Lock Access Control**, allow exactly the actions your rules use.
 
+### 2b. Nuki lock MQTT (optional, faster)
+Same page, section **Nuki lock MQTT**. Background, behaviour and log lines:
+`WAVESHARE.md` → "Nuki lock MQTT".
+1. On the page: tick **Enable the lock MQTT server**, set a **user name** and a
+   **password** (*Generate random* works; at most 32 characters each, the Nuki
+   app's limit), leave **Expected client ID** empty for now, Save.
+2. In the Nuki app: the lock → Settings → **Features & Configuration → Smart
+   Home → MQTT**: enable it, host = **the board's IP**, the same user name and
+   password, **Allow locking on**, **Auto discovery (Home Assistant) off**. The
+   lock always uses port 1883, without TLS. The app should show a green check.
+3. Reload the page: **Lock connected: yes**, client `Nuki_…`, "Lock actions go
+   over: MQTT". Copy the shown client ID into **Expected client ID** and save
+   (optional: then only that client ID can log in). If it says "BLE until the
+   next reboot", reboot the board once.
+4. **Redundant-action skip** (on by default, only works with the server): a
+   `lock` press while the lock reports locked (and the door closed, if a door
+   sensor reports) or an `unlock` press while it reports unlocked does nothing
+   and answers `200 skipped_locked` / `skipped_unlocked`; the log shows e.g.
+   `Protect webhook: lock -> skipped, already locked (MQTT state 5230 ms old,
+   lock last heard 1200 ms ago)`. Only while the lock's MQTT session is live,
+   the state came over it after Nuki Hub's last command, and the lock was heard
+   from within "Skip only if the lock was heard from within" (default 330 s,
+   the lock pings every 300 s). Never for unlatch, lock 'n' go, full lock or fob
+   actions, and never from the BLE cache (which can be 30 min old). A skipped
+   press still counts for replay and cooldown.
+
 ### 3. Point the alarms at the board
 One alarm per rule (e.g. "Fob A - Hold Right", "Fob A - Press Right"):
 - Trigger: Button, the gesture, scope the fob's button
@@ -126,7 +155,8 @@ One alarm per rule (e.g. "Fob A - Hold Right", "Fob A - Press Right"):
   for NTP again.
 - Protect retries on 5xx/408 only (1 s, then 2 s). A retry of an accepted press
   gets `429 cooldown`, so it never runs twice. If the board is offline, the press is lost (Protect has no queue).
-- `200 ack` means *queued*, not *done*. If the lock can't be reached (out of BLE
+- `200 ack` means *queued* (or, with the lock MQTT session up, *published to
+  the lock*), not *done*. If the lock can't be reached (out of BLE
   range, busy), a queued action that hasn't been sent within 8 s
   (the action deadline on the web page) is dropped and the log shows
   `Lock action expired`, so the door never opens long after the press.
@@ -175,6 +205,33 @@ suite below, and the settings validation, storage format and form helpers
 4. Tick the action again, hold the real fob button, and watch the Nuki Hub
    log (USB-C serial) for `Protect webhook: unlock -> queued`.
 
+### Press timing
+Every webhook lock action logs how long it took and which transport carried it
+(USB-C log, or the web serial log). Example, numbers invented:
+```
+Protect timing: unlock via MQTT, sent 3 ms after the webhook
+Protect timing: unlock via MQTT, lock received it 41 ms after the webhook
+Protect timing: unlock via MQTT, lock completed the delivery (PUBCOMP) 44 ms after the webhook
+Protect timing: unlock via MQTT, lock confirmed (lockActionEvent) 180 ms after the webhook
+Protect timing: unlock via MQTT, commandResponse 0 2300 ms after the webhook
+```
+or over BLE:
+```
+Protect timing: lock action picked up 12 ms after the webhook
+Protect timing: BLE lock action done in 1450 ms, 1462 ms after the webhook
+Protect timing: unlock via BLE, lock confirmed 1462 ms after the webhook
+```
+The "via MQTT/BLE, lock confirmed N ms" line is the one to compare. If MQTT
+isn't confirmed within 2 s: `Protect timing: unlock via MQTT not confirmed 2003
+ms after the webhook, retrying over BLE`, then the BLE lines. To measure: press
+the same fob button ten times with the lock connected over MQTT, then switch
+the lock's MQTT off in the Nuki app (the page shows "Lock actions go over:
+BLE") and press ten more times. The numbers are uptime-based ms on the board,
+from the moment the webhook handed the action over. To see whether the
+lock acts before or after QoS 2's PUBREL, compare "lock completed the delivery"
+with "lock confirmed"; a build with `-DLOCK_MQTT_ACTION_QOS=1` saves that round
+trip if the lock waits for it.
+
 ### Losing a fob
 Remove it in Protect **and** disable or delete its rules on the web page (applies
 at once). Either one alone stops it; do both. Rotating a rule's token also kills
@@ -189,7 +246,8 @@ would have to hold a Protect API key. The webhook keeps credentials off the lock
 ### Response codes
 | Code | Result | Meaning |
 |---|---|---|
-| 200 | `ack` | Queued for the lock task; for a `relayN` rule: relay closed, it opens after the relay pulse time |
+| 200 | `ack` | Queued for the lock task, or published to the lock over MQTT; for a `relayN` rule: relay closed, it opens after the relay pulse time |
+| 200 | `skipped_locked` / `skipped_unlocked` | `lock`/`unlock` not sent: the lock's live MQTT session says it already is locked/unlocked (section 2b) |
 | 400 | `bad_json` / `no_triggers` | Body not a Protect alarm |
 | 403 | `disabled` | Webhook switched off or its settings invalid (the web page says why) |
 | 403 | `denied` | Wrong source IP or secret, or `?k=` with *Bearer only* |
@@ -199,5 +257,5 @@ would have to hold a Protect API key. The webhook keeps credentials off the lock
 | 429 | `cooldown` | Replayed event, or within the cooldown (default 10 s) since the last accepted event for the same rule. Editing a rule resets its cooldown. |
 | 500 | `error` | Lock action couldn't be queued, or the relay's I2C write failed (a retry then gets `429`) |
 | 503 | `no_time` | Clock not synced yet (Protect retries twice) |
-| 503 | `busy` | Another lock action is still queued or being sent, or settings are being saved (Protect retries twice) |
+| 503 | `busy` | Another lock action is still queued or being sent (or sent over MQTT and not confirmed yet, max. 2 s), or settings are being saved (Protect retries twice) |
 | 503 | `ble_stalled` | The BLE (nuki) task hasn't run for the BLE stall time (default 30 s); the board reboots right after replying (also sent briefly after boot, before BLE starts) |
