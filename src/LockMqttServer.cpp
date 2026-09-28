@@ -29,11 +29,13 @@
 #endif
 
 // QoS for lockAction. Nuki: "For all messages QOS = 2 is used by the device
-// and should be used by the publisher too" (MQTT API 1.6, 4.3). Build with
-// -DLOCK_MQTT_ACTION_QOS=1 to compare: QoS 1 saves the PUBREL round trip if
-// the lock acts only after PUBREL.
+// and should be used by the publisher too" (MQTT API 1.6, 4.3). We use QoS 1:
+// on an Ultra (2026-09-28) the lock received a QoS 1 lockAction after ~180 ms
+// and acted without waiting for the PUBREL round trip, which felt clearly
+// snappier than QoS 2. The server never re-sends a lockAction, so QoS 1 can't
+// deliver one twice. Build with -DLOCK_MQTT_ACTION_QOS=2 for Nuki's default.
 #ifndef LOCK_MQTT_ACTION_QOS
-#define LOCK_MQTT_ACTION_QOS 2
+#define LOCK_MQTT_ACTION_QOS 1
 #endif
 static_assert(LOCK_MQTT_ACTION_QOS >= 0 && LOCK_MQTT_ACTION_QOS <= 2, "LOCK_MQTT_ACTION_QOS must be 0..2");
 

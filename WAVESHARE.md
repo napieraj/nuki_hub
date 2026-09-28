@@ -160,8 +160,9 @@ lock isn't connected.
   (only to learn whether the lock listens to `nuki/<ID>/lockAction`), PINGREQ,
   DISCONNECT. No retained store, no wills, no bridging, clean sessions only.
   Messages larger than 320 bytes (e.g. Home Assistant discovery, if left on in
-  the app) are acknowledged and dropped. lockAction is sent with QoS 2, as Nuki
-  documents (`-DLOCK_MQTT_ACTION_QOS=1` to compare).
+  the app) are acknowledged and dropped. lockAction is sent with QoS 1 (the lock acts ~180 ms after
+  receipt instead of waiting for QoS 2's PUBREL; `-DLOCK_MQTT_ACTION_QOS=2` for
+  Nuki's documented QoS 2).
 - **Routing:** an action goes over MQTT only while the lock is connected, has
   published `connected=true`, subscribes to lockAction ("Allow locking" on in
   the app) and the action is one the MQTT API takes (1-6: unlock, lock,
@@ -195,7 +196,7 @@ Log lines to expect:
 Lock MQTT: listening on port 1883 for the Nuki lock
 Lock MQTT: lock connected (client 'Nuki_2BB28570', keepalive 300 s, from 192.0.2.50)
 Lock MQTT: lock subscribed to nuki/2BB28570/lockAction (QoS 2): lock actions go over MQTT
-Lock MQTT: lockAction 1 sent (QoS 2, id 1)
+Lock MQTT: lockAction 1 sent (QoS 1, id 1)
 Lock MQTT: refused client 'x' from 192.0.2.99: bad user name or password
 Lock MQTT: takeover, closing the previous session from 192.0.2.50
 ```

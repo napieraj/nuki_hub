@@ -244,10 +244,11 @@ ms after the webhook, retrying over BLE`, then the BLE lines. To measure: press
 the same fob button ten times with the lock connected over MQTT, then switch
 the lock's MQTT off in the Nuki app (the page shows "Lock actions go over:
 BLE") and press ten more times. The numbers are uptime-based ms on the board,
-from the moment the webhook handed the action over. To see whether the
-lock acts before or after QoS 2's PUBREL, compare "lock completed the delivery"
-with "lock confirmed"; a build with `-DLOCK_MQTT_ACTION_QOS=1` saves that round
-trip if the lock waits for it.
+from the moment the webhook handed the action over. lockAction is sent with
+QoS 1 by default: on the Ultra the lock received it after ~180 ms and acted
+without waiting for QoS 2's PUBREL round trip. A build with
+`-DLOCK_MQTT_ACTION_QOS=2` restores Nuki's documented QoS 2 ("lock completed
+the delivery" then shows when that round trip ended).
 
 ### Losing a fob
 Remove it in Protect **and** disable or delete its rules on the web page (applies
