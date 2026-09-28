@@ -135,6 +135,14 @@ Same page, section **Nuki lock MQTT**. Background, behaviour and log lines:
    the lock pings every 300 s). Never for unlatch, lock 'n' go, full lock or fob
    actions, and never from the BLE cache (which can be 30 min old). A skipped
    press still counts for replay and cooldown.
+   **Skip grace:** never skipped within "Skip grace after a fob action (s)"
+   (default 60, 0-600, 0 = off) of the previous accepted webhook lock action
+   (any rule, any lock action, queued or skipped; relays don't count): right
+   after an action the reported state can lag or still be moving, so a quick
+   follow-up press (unlock, then lock straight away) is always sent. When the
+   grace is what prevented a skip, the log shows e.g. `Protect webhook: lock ->
+   sent, previous fob action 12 s ago (skip grace 60 s)`, then the usual
+   `lock -> queued`.
 
 ### 3. Point the alarms at the board
 One alarm per rule (e.g. "Fob A - Hold Right", "Fob A - Press Right"):
