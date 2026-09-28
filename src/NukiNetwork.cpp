@@ -461,6 +461,18 @@ bool NukiNetwork::update()
         _importExport->_invalidCount2--;
     }
 
+#ifdef NUKI_HUB_NO_EXTERNAL_MQTT
+    // No MQTT client: nothing below applies (reconnects, maintenance and
+    // GPIO topics, internet ping, update checks). Only log the IP once.
+    if(_logIp && _device->isConnected() && !_device->localIP().equals("0.0.0.0"))
+    {
+        _logIp = false;
+        Log->print("IP: ");
+        Log->println(_device->localIP());
+    }
+    return false;
+#endif
+
     if(disableNetwork || !_mqttEnabled || _device->isApOpen())
     {
         return false;
@@ -1469,6 +1481,9 @@ void NukiNetwork::publishString(const char* prefix, const char *topic, const cha
 
 void NukiNetwork::publish(const char* prefix, const char *topic, const char *value, bool retain)
 {
+#ifdef NUKI_HUB_NO_EXTERNAL_MQTT
+    return; // no MQTT broker in this build
+#endif
     char path[200] = {0};
     buildMqttPath(path, { prefix, topic });
     _device->mqttPublish(path, MQTT_QOS_LEVEL, retain, value);
@@ -1476,6 +1491,9 @@ void NukiNetwork::publish(const char* prefix, const char *topic, const char *val
 
 void NukiNetwork::publish(const char* path, const char *value, bool retain)
 {
+#ifdef NUKI_HUB_NO_EXTERNAL_MQTT
+    return; // no MQTT broker in this build
+#endif
     _device->mqttPublish(path, MQTT_QOS_LEVEL, retain, value);
 }
 

@@ -1426,7 +1426,10 @@ void setupTasks(bool ota)
 
     if(ota)
     {
+#ifndef NUKI_HUB_WAVESHARE_8DI8RO
+        // (Not reached on this board: doOta is never set, updates are USB-only.)
         xTaskCreatePinnedToCore(otaTask, "ota", 8192, NULL, 2, &otaTaskHandle, (espCores > 1) ? 1 : 0);
+#endif
     }
     else
     {

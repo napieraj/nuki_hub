@@ -22,6 +22,9 @@ HomeAssistantDiscovery::HomeAssistantDiscovery(NetworkDevice* device, Preference
 
 void HomeAssistantDiscovery::setupHASS(int type, uint32_t nukiId, char* nukiName, const char* firmwareVersion, const char* hardwareVersion, bool hasDoorSensor, bool hasKeypad)
 {
+#ifdef NUKI_HUB_NO_EXTERNAL_MQTT
+    return; // no MQTT broker in this build
+#endif
     uint64_t savedDevId = _preferences->getULong64(preference_nukihub_id, 0);
     uint64_t curDevId;
 
@@ -119,6 +122,9 @@ void HomeAssistantDiscovery::setupHASS(int type, uint32_t nukiId, char* nukiName
 
 void HomeAssistantDiscovery::disableHASS()
 {
+#ifdef NUKI_HUB_NO_EXTERNAL_MQTT
+    return; // no MQTT broker in this build
+#endif
     removeHASSConfig(_nukiHubUidString);
     espDelayAck(3000);
 
@@ -3065,6 +3071,9 @@ void HomeAssistantDiscovery::publishHassTopic(const String& mqttDeviceType,
         std::vector<std::pair<char*, char*>> additionalEntries
                                              )
 {
+#ifdef NUKI_HUB_NO_EXTERNAL_MQTT
+    return; // no MQTT broker in this build
+#endif
     if (_preferences->getString(preference_mqtt_hass_discovery, "") != "")
     {
         JsonDocument json;
@@ -3091,6 +3100,9 @@ String HomeAssistantDiscovery::createHassTopicPath(const String& mqttDeviceType,
 
 void HomeAssistantDiscovery::removeHassTopic(const String& mqttDeviceType, const String& mqttDeviceName, const String& uidString)
 {
+#ifdef NUKI_HUB_NO_EXTERNAL_MQTT
+    return; // no MQTT broker in this build
+#endif
     if (_preferences->getString(preference_mqtt_hass_discovery, "") != "")
     {
         String path = createHassTopicPath(mqttDeviceType, mqttDeviceName, uidString);
