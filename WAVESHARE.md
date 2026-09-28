@@ -6,6 +6,10 @@ Step-by-step setup from an empty board: **`SETUP.md`**.
 
 One board, PoE-powered, bridging a Nuki lock over BLE and taking lock actions
 from a UniFi Protect Alarm Manager webhook. No Wi-Fi, no MQTT broker needed.
+Optionally the Nuki lock (Ultra, Go, 5th gen, 4th gen, 3.0 Pro) connects over
+its own Wi-Fi to a tiny MQTT server built into this firmware (Nuki's official
+MQTT API): near-instant lock actions and real-time lock state, with BLE as the
+fallback. See "Nuki lock MQTT" below.
 
 ### What the build flag changes (`NUKI_HUB_WAVESHARE_8DI8RO`)
 - Network hardware is pinned to the on-board W5500 (custom LAN: CS 16, IRQ 12,
@@ -18,6 +22,21 @@ from a UniFi Protect Alarm Manager webhook. No Wi-Fi, no MQTT broker needed.
   is off (`sdkconfig.defaults.waveshare-8di8ro`). The web UI has no Wi-Fi pages,
   RSSI field or "Also reset WiFi settings" box. Saves about 285 KiB flash and
   14 KiB internal RAM. The flag is refused in builds without this board's flag.
+- Nuki Hub's own MQTT is compiled out (`-DNUKI_HUB_NO_EXTERNAL_MQTT`): no MQTT
+  client, no `nukihub/` topics, no Home Assistant discovery, no github.com ping,
+  no "MQTT Configuration" pages or "MQTT Connected" row. The only MQTT on the
+  board is the lock's session on the built-in server. What is left of the
+  upstream publishing code (NukiNetworkLock builds its JSON, then `publish()`
+  returns at once) is inert. The web serial log still works.
+- No HTTPS server (`NUKI_HUB_HTTPS_SERVER` unset): Protect needs plain HTTP on
+  port 80, and a certificate would turn port 80 into a redirect. The OTA
+  download task isn't built either (updates are USB-only).
+- `-DNUKI_HUB_EMBEDDED_LOCK_MQTT`: the built-in MQTT server for the Nuki lock
+  (off until enabled on the web page), see "Nuki lock MQTT" below.
+- Sizes: no external MQTT saves ~159 KiB flash (Home Assistant discovery alone
+  was ~97 KiB, espMqttClient ~10 KiB), no HTTPS server ~11 KiB; the lock server
+  adds ~18 KiB. firmware.bin: 1,608,000 -> 1,451,536 bytes (-153 KiB) against the
+  build before these changes.
 - The WS2812 (GPIO 38) flashes after each authenticated webhook call: short
   **green** = action queued, **red** = no rule matched (or stale) or refused by the
   ACL. Busy, cooldown and replays don't flash. If the colours are swapped, build
@@ -66,10 +85,13 @@ from a UniFi Protect Alarm Manager webhook. No Wi-Fi, no MQTT broker needed.
   |--------------------------------|-------------------------------------------|
   | BT controller, NimBLE host     | lwIP tcpip task (`sdkconfig.defaults.waveshare-8di8ro`) |
   | `nuki` task (BLE to the lock)  | `ntw` task, httpd incl. `/protect` webhook |
+  |                                | `lockmqtt` task (built-in MQTT server, 5 KiB stack, prio 3) |
 
   A webhook handler only queues the action; the nuki task on core 0 performs
-  it over BLE. The W5500 driver's RX task is created by ESP-IDF without an
-  affinity and may run on either core.
+  it over BLE. With the lock's MQTT session up, the webhook handler instead
+  publishes lockAction to the lock directly (no queue, no BLE). The W5500
+  driver's RX task is created by ESP-IDF without an affinity and may run on
+  either core.
 - Forced on every boot, whatever the web UI or a config import stored, so the
   webhook can't be switched off by accident: web server **on**, "Disable network
   if not connected" **off**, "Restart on disconnect" **off**, and "Update Nuki Hub
@@ -102,10 +124,82 @@ from a UniFi Protect Alarm Manager webhook. No Wi-Fi, no MQTT broker needed.
 3. Put the lock in pairing mode. It pairs as app (Ultra has no bridge mode).
 4. Do **not** enable HTTPS in Nuki Hub: Protect rejects self-signed certificates and
    does not follow the HTTP→HTTPS redirect.
-5. Leave MQTT unconfigured if you don't use it; lock actions and the webhook
-   do not need it. Without Hybrid mode, state changes not made by Nuki Hub
-   (keypad, manual turns) are only seen at the next lock-state poll.
+5. There is no MQTT broker to configure. Optional but recommended for speed:
+   let the lock connect to the built-in server ("Nuki lock MQTT" below).
+   Without it, state changes not made by Nuki Hub (keypad, manual turns) are
+   only seen at the next lock-state poll (default 30 min).
+
+### Nuki lock MQTT (built-in server)
+The lock joins your Wi-Fi and connects to this board's Ethernet IP, port 1883,
+using Nuki's official MQTT API. Nuki Hub runs upstream's "hybrid mode" against
+that session in-process: the lock's state, door sensor, lockActionEvent and
+commandResponse arrive within milliseconds, and lock actions are published to
+the lock instead of going over BLE. BLE stays: pairing, the extra information
+upstream reads over BLE after each state change, and every action while the
+lock isn't connected.
+
+- **One client only: the lock.** Nuki Hub is not a network client, and nothing
+  else can subscribe or publish, so no one on the network can send lockAction.
+  A client must log in with the user name + password set on the web page (and
+  in the Nuki app) and, if set, the expected client ID (the lock uses
+  `Nuki_<Nuki ID in hex>`, e.g. `Nuki_2BB28570`; seen in a mosquitto log of a
+  4th-gen lock, so check the page's "Lock connected" line for the Ultra's).
+  Anything else gets a CONNACK refusal and is closed. A socket that hasn't
+  logged in within 5 s is closed; at most two wait at a time and they never
+  push out the lock's session.
+- **Takeover:** a new login with the right credentials replaces the running
+  session (as a broker does for the same client ID), so a half-open old
+  connection can't lock the lock out after it roamed or rebooted. TCP
+  keepalive (60 s idle, 3 probes 10 s apart) notices a lock that vanished in
+  about 90 s; the MQTT keepalive (1.5 x the lock's 300 s) is the backstop.
+- **Protocol:** MQTT 3.1.1 only what the lock uses: CONNECT/CONNACK, PUBLISH
+  QoS 0/1/2 both ways (PUBACK, PUBREC/PUBREL/PUBCOMP), SUBSCRIBE/UNSUBSCRIBE
+  (only to learn whether the lock listens to `nuki/<ID>/lockAction`), PINGREQ,
+  DISCONNECT. No retained store, no wills, no bridging, clean sessions only.
+  Messages larger than 320 bytes (e.g. Home Assistant discovery, if left on in
+  the app) are acknowledged and dropped. lockAction is sent with QoS 2, as Nuki
+  documents (`-DLOCK_MQTT_ACTION_QOS=1` to compare).
+- **Routing:** an action goes over MQTT only while the lock is connected, has
+  published `connected=true`, subscribes to lockAction ("Allow locking" on in
+  the app) and the action is one the MQTT API takes (1-6: unlock, lock,
+  unlatch, lock 'n' go, lock 'n' go + unlatch, full lock). Fob actions and
+  everything else use BLE. Enabling the server switches on Nuki Hub's hybrid
+  settings (hybrid mode, "send actions through official MQTT", "retry over BLE
+  if failed"); if hybrid mode was off at boot, MQTT actions start after a reboot.
+- **Fallback:** if the lock doesn't confirm an MQTT action within 2 s
+  (lockActionEvent or commandResponse 0), it is sent over BLE, within the
+  webhook's action deadline. Exception: if the lock acknowledged the PUBLISH
+  (PUBREC) of a send-once action (unlatch, lock 'n' go + unlatch, lock, lock 'n'
+  go, full lock), it has the command and may be running it, so it isn't sent
+  again: `Lock MQTT: the lock received unlatch but didn't confirm it within 2 s;
+  not re-sent over BLE (it may have run)`.
+- **When the session ends** the lock is marked offline at once (as its will
+  would do) and actions go over BLE: `Lock MQTT: lock disconnected (...),
+  actions use BLE`.
+- **Plain MQTT on 1883, no TLS:** Nuki's MQTT API has no encryption ("does not
+  support encrypted connections because of memory constraints", MQTT API 1.6,
+  2.3) and always uses port 1883, so TLS isn't possible from the lock's side.
+  Keep the lock and the board on a trusted VLAN; the password only keeps other
+  clients out.
+- **Resources:** 18 KiB flash, 2 KiB static RAM (three connection buffers of
+  320 bytes plus state), a 5 KiB task stack (the page shows how much is
+  unused), 4 of lwIP's 24 sockets (listener, the lock, two waiting logins)
+  next to httpd's. The server task waits in select() and runs on core 1 with
+  the network task; BLE (core 0) is untouched.
+
+Log lines to expect:
+```
+Lock MQTT: listening on port 1883 for the Nuki lock
+Lock MQTT: lock connected (client 'Nuki_2BB28570', keepalive 300 s, from 192.0.2.50)
+Lock MQTT: lock subscribed to nuki/2BB28570/lockAction (QoS 2): lock actions go over MQTT
+Lock MQTT: lockAction 1 sent (QoS 2, id 1)
+Lock MQTT: refused client 'x' from 192.0.2.99: bad user name or password
+Lock MQTT: takeover, closing the previous session from 192.0.2.50
+```
+The web page shows whether the lock is connected, since when, the last
+message, the last state and where actions go.
 
 The key to the lock lives on this network-facing board: keep it on its own
-VLAN, allow only the Protect console to reach port 80, and turn on Duo/TOTP
+VLAN, allow only the Protect console to reach port 80 (and the lock port 1883,
+if it uses the built-in MQTT server), and turn on Duo/TOTP
 for the web UI.
