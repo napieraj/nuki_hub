@@ -544,6 +544,34 @@ void test_html_escape()
     TEST_ASSERT_TRUE(htmlEscape("abcd", small, sizeof(small)));
 }
 
+void test_utf8_name()
+{
+    // "Fob A \u00b7 Hold Right \u2192 Unlatch": 28 characters, 31 bytes.
+    const char* label = "Fob A \xc2\xb7 Hold Right \xe2\x86\x92 Unlatch";
+    Rule r;
+    TEST_ASSERT_TRUE(setTrimmed(r.name, sizeof(r.name), label));
+    TEST_ASSERT_EQUAL_STRING(label, r.name);
+    // Limits count bytes, and too long is refused whole: never half a character.
+    char buf[4];
+    TEST_ASSERT_TRUE(setTrimmed(buf, sizeof(buf), "a\xc2\xb7"));     // 3 bytes
+    TEST_ASSERT_FALSE(setTrimmed(buf, sizeof(buf), "ab\xc2\xb7"));   // 4 bytes
+    TEST_ASSERT_FALSE(setTrimmed(buf, sizeof(buf), "\xe2\x86\x92x")); // 4 bytes
+    TEST_ASSERT_TRUE(setTrimmed(buf, sizeof(buf), " \xe2\x86\x92 "));
+    TEST_ASSERT_EQUAL_STRING("\xe2\x86\x92", buf);
+    // Rendered back: UTF-8 bytes pass through, markup is escaped, and an
+    // old stored "&#8594;" shows as that text.
+    char out[128];
+    TEST_ASSERT_TRUE(htmlEscape("<\xe2\x86\x92>", out, sizeof(out)));
+    TEST_ASSERT_EQUAL_STRING("&lt;\xe2\x86\x92&gt;", out);
+    TEST_ASSERT_TRUE(htmlEscape("&#8594;", out, sizeof(out)));
+    TEST_ASSERT_EQUAL_STRING("&amp;#8594;", out);
+    // A UTF-8 name is fine in a rule (only key/field/value are identifiers).
+    Settings s = valid();
+    strcpy(s.rules[0].name, label);
+    err[0] = 0;
+    TEST_ASSERT_TRUE_MESSAGE(validateForSave(s, WAVESHARE, err, sizeof(err)), err);
+}
+
 void test_rule_changes()
 {
     Settings a = valid();
@@ -621,6 +649,7 @@ int main()
     RUN_TEST(test_write_only_fields);
     RUN_TEST(test_text_and_numbers);
     RUN_TEST(test_html_escape);
+    RUN_TEST(test_utf8_name);
     RUN_TEST(test_rule_changes);
     RUN_TEST(test_matching_uses_enabled_slots);
     RUN_TEST(test_replay_guard_reset_rule);

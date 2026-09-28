@@ -65,7 +65,8 @@ can open the door, and it shows a big red warning while the web UI has no passwo
   `sensor_button_pressed`, device `<fob MAC>`, field `button` = `right`,
   field 2 `value` = `longPress`, action `unlock`. One fob per person, so the fob
   is the identity. Actions: the Nuki lock actions, or `relay1`..`relayN` (N =
-  "Relays available to rules").
+  "Relays available to rules"). The *Name* is only a label and may use any
+  text (stored as UTF-8, at most 32 bytes: `é` takes 2, `→` 3).
 - **Webhook enabled**: the master switch. The status box at the top says whether
   the webhook is active and, if not, why (no secret, invalid rule, switched off),
   plus the clock, the BLE task and the last 10 requests.
