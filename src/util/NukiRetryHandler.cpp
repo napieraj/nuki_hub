@@ -19,6 +19,9 @@ const Nuki::CmdResult NukiRetryHandler::retryComm(std::function<Nuki::CmdResult(
     int retryCount = 0;
 
     setCommPins(HIGH);
+#ifdef NUKI_HUB_PROTECT_WEBHOOK
+    _stopRetrying = false;
+#endif
 
     while(retryCount < _nrOfRetries + 1 && cmdResult != Nuki::CmdResult::Success)
     {
@@ -34,13 +37,32 @@ const Nuki::CmdResult NukiRetryHandler::retryComm(std::function<Nuki::CmdResult(
             setCommErrorPins(HIGH);
             ++retryCount;
 
-            Log->print(_reference.c_str());
-            Log->print(": Last command failed, retrying after ");
-            Log->print(_retryDelay);
-            Log->print(" milliseconds. Retry ");
-            Log->print(retryCount);
-            Log->print(" of ");
-            Log->println(_nrOfRetries);
+#ifdef NUKI_HUB_PROTECT_WEBHOOK
+            // Fork: the log says what really happens next. Upstream printed
+            // "Retry 4 of 3" after the last attempt, and "retrying" lines after
+            // the caller had decided not to send again.
+            if(_stopRetrying)
+            {
+                break; // the caller logged why; nothing more is sent
+            }
+            if(retryCount > _nrOfRetries)
+            {
+                Log->print(_reference.c_str());
+                Log->print(": Last command failed, no retries left (");
+                Log->print(_nrOfRetries);
+                Log->println(_nrOfRetries == 1 ? " retry done)" : " retries done)");
+            }
+            else
+#endif
+            {
+                Log->print(_reference.c_str());
+                Log->print(": Last command failed, retrying after ");
+                Log->print(_retryDelay);
+                Log->print(" milliseconds. Retry ");
+                Log->print(retryCount);
+                Log->print(" of ");
+                Log->println(_nrOfRetries);
+            }
 
             espDelayAck(_retryDelay);
         }

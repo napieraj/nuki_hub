@@ -173,7 +173,11 @@ One alarm per rule (e.g. "Fob A - Hold Right", "Fob A - Press Right"):
   retried only if they provably never reached the lock (not paired); otherwise
   the log shows `Lock action result: timeOut`, then e.g.
   `Lock: result ambiguous (TIMEOUT), not retrying` (or `Unlatch: ...`, with
-  `FAILED` / `LOCK_BUSY` / `ERROR`), and MQTT `lock/retry` reads `ambiguous`.
+  `FAILED` / `LOCK_BUSY` / `ERROR`) and `Lock: action may have run, not
+  retried`, with no `Last command failed, retrying ...` lines after it; MQTT
+  `lock/retry` reads `ambiguous`. A retried action logs `Retry 1 of 3` ..
+  `Retry 3 of 3`, then `Lock: Last command failed, no retries left (3 retries
+  done)` if the last attempt fails too.
   Check the lock state and press again if needed. `unlock` is still retried: a
   second unlock of an unlocked lock doesn't move the motor. This applies to every
   source (webhook, GPIO inputs, MQTT).
