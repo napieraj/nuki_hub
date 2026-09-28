@@ -267,6 +267,11 @@ bool WebCfgServer::forkSettingsParse(PsychicRequest* request, Settings& s, char*
             snprintf(err, errLen, "Lock MQTT: 'heard from within' must be a whole number of milliseconds");
             return false;
         }
+        if(request->hasParam("FS_LM_GRACE") && !parseUint(param(request, "FS_LM_GRACE").c_str(), s.skipGraceS))
+        {
+            snprintf(err, errLen, "Lock MQTT: 'skip grace' must be a whole number of seconds");
+            return false;
+        }
     }
 #endif
     s.bearerOnly = isParameterTrue(request, "FS_BEARER");
@@ -519,6 +524,7 @@ void WebCfgServer::buildLockMqttSection(PsychicStreamResponse* response, const S
     printInputField(response, "FS_LM_CID", hint, esc(s.lockMqttClientId).c_str(), LEN_MQTT_CLIENT_ID, "");
     printCheckBox(response, "FS_LM_SKIP", "Webhook: skip lock/unlock if the lock already is locked/unlocked (only while connected; never unlatch)", s.skipRedundant, "");
     printInputField(response, "FS_LM_SILENCE", "Skip only if the lock was heard from within (ms, 10000-900000)", (int)s.lockSilenceMs, 6, "");
+    printInputField(response, "FS_LM_GRACE", "Skip grace after a fob action (s, 0-600, 0 = off): never skip this soon after the previous one", (int)s.skipGraceS, 3, "");
     response->print("</table>");
 }
 #endif

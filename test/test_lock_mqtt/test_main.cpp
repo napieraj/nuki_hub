@@ -570,6 +570,50 @@ void test_redundant_action_rule()
     TEST_ASSERT_TRUE(redundantAction(nullptr, x, maxSilence) == Skip::Send);
 }
 
+void test_redundant_action_grace()
+{
+    LiveState st = { true, true, true, LOCK_STATE_LOCKED, false, 0, 1000 };
+    const int64_t maxSilence = 330000;
+    const int64_t g = 60000;
+    const int64_t now = 1000000;
+
+    // No previous action, or grace off: skip as before.
+    TEST_ASSERT_TRUE(redundantAction("lock", st, maxSilence, Grace{ false, 0, now, g }) == Skip::AlreadyLocked);
+    TEST_ASSERT_TRUE(redundantAction("lock", st, maxSilence, Grace{ true, now - 1, now, 0 }) == Skip::AlreadyLocked);
+    TEST_ASSERT_TRUE(redundantAction("lock", st, maxSilence, NO_GRACE) == Skip::AlreadyLocked);
+
+    // Inside the window: sent (and says why); edges: 0 ms, g - 1 ms inside, g ms outside.
+    TEST_ASSERT_TRUE(redundantAction("lock", st, maxSilence, Grace{ true, now - 12000, now, g }) == Skip::SendGrace);
+    TEST_ASSERT_TRUE(redundantAction("lock", st, maxSilence, Grace{ true, now, now, g }) == Skip::SendGrace);
+    TEST_ASSERT_TRUE(redundantAction("lock", st, maxSilence, Grace{ true, now - g + 1, now, g }) == Skip::SendGrace);
+    TEST_ASSERT_TRUE(redundantAction("lock", st, maxSilence, Grace{ true, now - g, now, g }) == Skip::AlreadyLocked);
+    TEST_ASSERT_TRUE(redundantAction("lock", st, maxSilence, Grace{ true, now - 10 * g, now, g }) == Skip::AlreadyLocked);
+
+    // Clock edge cases: a previous action "in the future" counts as inside;
+    // an action at boot (0) with now still small is inside; far apart is outside.
+    TEST_ASSERT_TRUE(redundantAction("lock", st, maxSilence, Grace{ true, now + 5, now, g }) == Skip::SendGrace);
+    TEST_ASSERT_TRUE(redundantAction("lock", st, maxSilence, Grace{ true, 0, 0, g }) == Skip::SendGrace);
+    TEST_ASSERT_TRUE(redundantAction("lock", st, maxSilence, Grace{ true, 0, g - 1, g }) == Skip::SendGrace);
+    TEST_ASSERT_TRUE(redundantAction("lock", st, maxSilence, Grace{ true, 0, INT64_MAX / 2, 600000 }) == Skip::AlreadyLocked);
+
+    // Unlock the same way.
+    st.lockState = LOCK_STATE_UNLOCKED;
+    TEST_ASSERT_TRUE(redundantAction("unlock", st, maxSilence, Grace{ true, now - 1000, now, g }) == Skip::SendGrace);
+    TEST_ASSERT_TRUE(redundantAction("unlock", st, maxSilence, Grace{ true, now - g, now, g }) == Skip::AlreadyUnlocked);
+
+    // SendGrace only where a skip would have happened: otherwise plain Send.
+    const Grace in = { true, now - 1000, now, g };
+    TEST_ASSERT_TRUE(redundantAction("lock", st, maxSilence, in) == Skip::Send);
+    TEST_ASSERT_TRUE(redundantAction("unlatch", st, maxSilence, in) == Skip::Send);
+    TEST_ASSERT_TRUE(redundantAction(nullptr, st, maxSilence, in) == Skip::Send);
+    LiveState x = st;
+    x.sessionLive = false;
+    TEST_ASSERT_TRUE(redundantAction("unlock", x, maxSilence, in) == Skip::Send);
+    x = st;
+    x.lastRxAgeMs = maxSilence + 1;
+    TEST_ASSERT_TRUE(redundantAction("unlock", x, maxSilence, in) == Skip::Send);
+}
+
 int main()
 {
     UNITY_BEGIN();
@@ -587,5 +631,6 @@ int main()
     RUN_TEST(test_publish_lock_action_qos_capped);
     RUN_TEST(test_disconnect_and_second_connect);
     RUN_TEST(test_redundant_action_rule);
+    RUN_TEST(test_redundant_action_grace);
     return UNITY_END();
 }

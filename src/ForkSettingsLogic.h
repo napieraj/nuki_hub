@@ -48,6 +48,9 @@ namespace ForkSettingsLogic
     // Redundant-action skip: the lock must have been heard from (any MQTT
     // packet) within this. The Nuki lock pings every 300 s (keepalive k300).
     constexpr Range LOCK_SILENCE_MS = { 10000, 900000, 330000 };
+    // ... but never within this many seconds of the previous accepted webhook
+    // lock action (the reported state can lag or be mid-motion). 0 = off.
+    constexpr Range SKIP_GRACE_S = { 0, 600, 60 };
 
     // Nuki Hub lock actions (NukiHelper::lockActionToEnum), canonical spelling.
     constexpr const char* LOCK_ACTIONS[] = {
@@ -99,6 +102,7 @@ namespace ForkSettingsLogic
         char lockMqttClientId[LEN_MQTT_CLIENT_ID + 1];  // "" = any client ID
         bool skipRedundant;                             // skip lock/unlock the lock already is in
         uint32_t lockSilenceMs;                         // skip only if the lock was heard from within this
+        uint32_t skipGraceS;                            // never skip within this after a webhook lock action (0 = off)
     };
 
     // What the board offers; validation rejects relayN / DIn beyond it.
@@ -124,6 +128,7 @@ namespace ForkSettingsLogic
         s.relayCount = MAX_RELAYS;
         s.skipRedundant = true;
         s.lockSilenceMs = LOCK_SILENCE_MS.def;
+        s.skipGraceS = SKIP_GRACE_S.def;
     }
 
     // Values left over from ProtectWebhookConfig.h.example ("replace-with-...").
@@ -492,6 +497,12 @@ namespace ForkSettingsLogic
                      (unsigned)LOCK_SILENCE_MS.max);
             return false;
         }
+        if(!inRange(s.skipGraceS, SKIP_GRACE_S))
+        {
+            snprintf(err, errLen, "Lock MQTT: 'skip grace' must be %u-%u s", (unsigned)SKIP_GRACE_S.min,
+                     (unsigned)SKIP_GRACE_S.max);
+            return false;
+        }
         if(!isPrintableAscii(s.lockMqttUser) || !isPrintableAscii(s.lockMqttPass) || !isPrintableAscii(s.lockMqttClientId))
         {
             snprintf(err, errLen, "Lock MQTT: user name, password and client ID may only contain printable ASCII");
@@ -605,13 +616,14 @@ namespace ForkSettingsLogic
     // "FS", version, then the fields in order; strings are u8 length + bytes.
 
     // Version 2 appends the lock MQTT section; version 1 blobs still load
-    // (lock MQTT off, defaults).
-    constexpr uint8_t BLOB_VERSION = 2;
+    // (lock MQTT off, defaults). Version 3 appends the skip grace (u32 s);
+    // version 2 blobs load with the default grace.
+    constexpr uint8_t BLOB_VERSION = 3;
 
     constexpr size_t MAX_BLOB_SIZE =
         3 + 1 + (1 + LEN_SECRET) + (1 + LEN_IP) + 5 * 4 + 1 + 1 + 1 + 1 +
         MAX_RULES * (1 + (1 + LEN_NAME) + (1 + LEN_TOKEN) + 5 * (1 + LEN_TEXT) + (1 + LEN_DEVICE) + (1 + LEN_ACTION)) +
-        1 + (1 + LEN_MQTT_USER) + (1 + LEN_MQTT_PASS) + (1 + LEN_MQTT_CLIENT_ID) + 4;
+        1 + (1 + LEN_MQTT_USER) + (1 + LEN_MQTT_PASS) + (1 + LEN_MQTT_CLIENT_ID) + 4 + 4;
 
     class Writer
     {
@@ -727,6 +739,7 @@ namespace ForkSettingsLogic
         w.str(s.lockMqttPass);
         w.str(s.lockMqttClientId);
         w.u32(s.lockSilenceMs);
+        w.u32(s.skipGraceS);
         return w.length();
     }
 
@@ -778,6 +791,10 @@ namespace ForkSettingsLogic
             }
             s.lockMqttEnabled = lockFlags & 1;
             s.skipRedundant = lockFlags & 2;
+        }
+        if(ver >= 3 && !r.u32(s.skipGraceS))
+        {
+            return false;
         }
         if(!r.atEnd())
         {

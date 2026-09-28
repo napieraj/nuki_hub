@@ -33,6 +33,19 @@ namespace
     // by `lock`.
     ReplayGuard<MAX_RULES> replayGuard;
     portMUX_TYPE lock = portMUX_INITIALIZER_UNLOCKED;
+    // The previous accepted webhook lock action (queued or skipped; any rule,
+    // any lock action, not relays), for the redundant-action skip grace.
+    // Guarded by `lock`.
+    bool havePrevLockAction = false;
+    int64_t prevLockActionMs = 0;
+
+    void notePrevLockAction(int64_t ms)
+    {
+        taskENTER_CRITICAL(&lock);
+        havePrevLockAction = true;
+        prevLockActionMs = ms;
+        taskEXIT_CRITICAL(&lock);
+    }
 
     // Last BLE heartbeat (espMillis), 0 = nuki task not running yet.
     int64_t bleHeartbeatTs = 0;
@@ -422,15 +435,30 @@ esp_err_t ProtectWebhook::handle(PsychicRequest* request, PsychicResponse* resp)
 #ifdef NUKI_HUB_EMBEDDED_LOCK_MQTT
         // 7. Redundant lock/unlock: only while the lock's MQTT session is live
         // and its state is fresh (never from the BLE cache, which can be
-        // 30 min old). After replay/cooldown, so a skip counts as a press.
+        // 30 min old), and not within the skip grace after the previous
+        // accepted webhook lock action (the state can lag or be mid-motion).
+        // After replay/cooldown, so a skip counts as a press.
         if(s.lockMqttEnabled && s.skipRedundant && _nuki->lockActionAllowed(rule->action))
         {
             LockMqttLogic::LiveState live;
             int64_t stateAgeMs;
             LockMqttServer::liveState(live, stateAgeMs);
-            const LockMqttLogic::Skip skip = LockMqttLogic::redundantAction(rule->action, live, (int64_t)s.lockSilenceMs);
-            if(skip != LockMqttLogic::Skip::Send)
+            // The previous accepted lock action, read before this one is noted.
+            LockMqttLogic::Grace grace = { false, 0, m, (int64_t)s.skipGraceS * 1000 };
+            taskENTER_CRITICAL(&lock);
+            grace.havePrevious = havePrevLockAction;
+            grace.previousMs = prevLockActionMs;
+            taskEXIT_CRITICAL(&lock);
+            const LockMqttLogic::Skip skip = LockMqttLogic::redundantAction(rule->action, live, (int64_t)s.lockSilenceMs, grace);
+            if(skip == LockMqttLogic::Skip::SendGrace)
             {
+                const int64_t ago = grace.nowMs > grace.previousMs ? grace.nowMs - grace.previousMs : 0;
+                Log->printf("Protect webhook: %s -> sent, previous fob action %lld s ago (skip grace %u s)\n",
+                            rule->action, (long long)(ago / 1000), (unsigned)s.skipGraceS);
+            }
+            else if(skip != LockMqttLogic::Skip::Send)
+            {
+                notePrevLockAction(m);
                 const bool locked = skip == LockMqttLogic::Skip::AlreadyLocked;
                 Log->printf("Protect webhook: %s -> skipped, already %s (MQTT state %lld ms old, lock last heard %lld ms ago)\n",
                             rule->action, locked ? "locked" : "unlocked", (long long)stateAgeMs, (long long)live.lastRxAgeMs);
@@ -443,6 +471,10 @@ esp_err_t ProtectWebhook::handle(PsychicRequest* request, PsychicResponse* resp)
         // Drop the action if the lock can't be reached in time: a press
         // shouldn't unlock the door long after the user gave up.
         LockActionResult r = _nuki->requestLockAction(rule->action, espMillis() + s.actionDeadlineMs);
+        if(r == LockActionResult::Success)
+        {
+            notePrevLockAction(m);
+        }
         Log->printf("Protect webhook: %s -> %s\n", rule->action,
                     r == LockActionResult::Success ? "queued" : "refused");
         switch(r)

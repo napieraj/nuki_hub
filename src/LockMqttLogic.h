@@ -913,28 +913,58 @@ namespace LockMqttLogic
         int64_t lastRxAgeMs;     // since the last packet from the lock (PUBLISH, PINGREQ, ...)
     };
 
-    enum class Skip : uint8_t { Send, AlreadyLocked, AlreadyUnlocked };
+    // SendGrace: would have been skipped, but the previous accepted webhook
+    // lock action was within the skip grace, so it is sent.
+    enum class Skip : uint8_t { Send, AlreadyLocked, AlreadyUnlocked, SendGrace };
+
+    // The previous accepted webhook lock action (any rule, any lock action;
+    // relays don't count), for the skip grace.
+    struct Grace
+    {
+        bool havePrevious;   // false: none since boot
+        int64_t previousMs;  // when it was accepted (monotonic ms)
+        int64_t nowMs;
+        int64_t graceMs;     // 0 = off
+    };
+
+    constexpr Grace NO_GRACE = { false, 0, 0, 0 };
+
+    // Within the grace: previous action known, grace on, and less than
+    // graceMs ago. A clock that went backwards (now < previous) counts as
+    // within: sending is the safe side.
+    inline bool withinGrace(const Grace& g)
+    {
+        return g.havePrevious && g.graceMs > 0 && g.nowMs - g.previousMs < g.graceMs;
+    }
 
     // Skip `lock` if locked (and, if a door sensor reports, the door is
     // closed), skip `unlock` if unlocked. Only with a live session whose state
     // is newer than Nuki Hub's last command and a lock heard from within
-    // maxSilenceMs. Never anything else (unlatch, lockNgo*, fullLock, fob...).
-    inline Skip redundantAction(const char* action, const LiveState& st, int64_t maxSilenceMs)
+    // maxSilenceMs, and not within the grace after the previous webhook lock
+    // action (then SendGrace). Never anything else (unlatch, lockNgo*,
+    // fullLock, fob...).
+    inline Skip redundantAction(const char* action, const LiveState& st, int64_t maxSilenceMs,
+                                const Grace& grace = NO_GRACE)
     {
         if(action == nullptr || !st.sessionLive || !st.haveState || !st.stateAfterCommand ||
            st.lastRxAgeMs < 0 || st.lastRxAgeMs > maxSilenceMs)
         {
             return Skip::Send;
         }
+        Skip skip = Skip::Send;
         if(strcmp(action, "lock") == 0)
         {
             const bool doorOk = !st.haveDoor || st.doorState == DOOR_DEACTIVATED || st.doorState == DOOR_CLOSED;
-            return st.lockState == LOCK_STATE_LOCKED && doorOk ? Skip::AlreadyLocked : Skip::Send;
+            skip = st.lockState == LOCK_STATE_LOCKED && doorOk ? Skip::AlreadyLocked : Skip::Send;
         }
-        if(strcmp(action, "unlock") == 0)
+        else if(strcmp(action, "unlock") == 0)
         {
-            return st.lockState == LOCK_STATE_UNLOCKED ? Skip::AlreadyUnlocked : Skip::Send;
+            skip = st.lockState == LOCK_STATE_UNLOCKED ? Skip::AlreadyUnlocked : Skip::Send;
         }
-        return Skip::Send;
+        if(skip != Skip::Send && withinGrace(grace))
+        {
+            return Skip::SendGrace;
+        }
+        return skip;
     }
 }
