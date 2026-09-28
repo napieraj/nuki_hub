@@ -42,7 +42,9 @@ using namespace LockMqttLogic;
 namespace
 {
     constexpr int kConns = 3;              // the lock + up to two connections still waiting for CONNECT
-    constexpr uint32_t kTaskStack = 6144;  // NukiOfficial's update handler runs on it
+    // -fstack-usage: the receive path into NukiOfficial needs ~2 KB, plus
+    // newlib printf for the log (~1-1.5 KB). The settings page shows the unused rest.
+    constexpr uint32_t kTaskStack = 5120;
     constexpr int kSelectMs = 200;
 
     struct Config
