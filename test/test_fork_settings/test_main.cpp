@@ -172,6 +172,61 @@ void test_broad_rules()
     TEST_ASSERT_TRUE(ok(s));
 }
 
+void test_rule_text_checked_on_save()
+{
+    auto saveOk = [](const Settings& s)
+    {
+        err[0] = 0;
+        return validateForSave(s, WAVESHARE, err, sizeof(err));
+    };
+    Settings s = valid();
+    TEST_ASSERT_TRUE_MESSAGE(saveOk(s), err);
+    strcpy(s.rules[0].value, "-1");
+    strcpy(s.rules[0].value2, "2.5");
+    TEST_ASSERT_TRUE_MESSAGE(saveOk(s), err); // numbers are fine
+
+    // The reported case: a label in the key field.
+    s = valid();
+    strcpy(s.rules[1].key, "Fob A \xc2\xb7 Hold Right \xe2\x86\x92 Unlatch");
+    TEST_ASSERT_TRUE(ok(s)); // stored settings keep loading...
+    TEST_ASSERT_FALSE(saveOk(s)); // ...but a new save is refused
+    TEST_ASSERT_NOT_NULL(strstr(err, "Rule 2: the key"));
+    strcpy(s.rules[1].key, "sensor button pressed");
+    TEST_ASSERT_FALSE(saveOk(s));
+    strcpy(s.rules[1].key, "&#8594;");
+    TEST_ASSERT_FALSE(saveOk(s));
+    s.rules[1].enabled = false; // drafts are not checked
+    TEST_ASSERT_TRUE_MESSAGE(saveOk(s), err);
+
+    const char* bad[] = { "Right ", "long press", "right\xe2\x86\x92", "a/b", "x\"y" };
+    for(const char* b : bad)
+    {
+        s = valid();
+        strcpy(s.rules[0].field, b);
+        TEST_ASSERT_FALSE_MESSAGE(saveOk(s), b);
+        TEST_ASSERT_NOT_NULL(strstr(err, "Rule 1: field "));
+        s = valid();
+        strcpy(s.rules[0].value, b);
+        TEST_ASSERT_FALSE_MESSAGE(saveOk(s), b);
+        TEST_ASSERT_NOT_NULL(strstr(err, "Rule 1: value "));
+        s = valid();
+        strcpy(s.rules[0].field2, b);
+        TEST_ASSERT_FALSE_MESSAGE(saveOk(s), b);
+        TEST_ASSERT_NOT_NULL(strstr(err, "Rule 1: field 2"));
+        s = valid();
+        strcpy(s.rules[0].value2, b);
+        TEST_ASSERT_FALSE_MESSAGE(saveOk(s), b);
+        TEST_ASSERT_NOT_NULL(strstr(err, "Rule 1: value 2"));
+    }
+
+    // Other problems still come first, as in validate().
+    s = valid();
+    strcpy(s.rules[0].key, "bad key");
+    s.rules[0].device[0] = 0;
+    TEST_ASSERT_FALSE(saveOk(s));
+    TEST_ASSERT_NOT_NULL(strstr(err, "device"));
+}
+
 void test_relay_count()
 {
     Settings s = valid(); // rule 2 uses relay2
@@ -555,6 +610,7 @@ int main()
     RUN_TEST(test_source_ip);
     RUN_TEST(test_rule_checks);
     RUN_TEST(test_broad_rules);
+    RUN_TEST(test_rule_text_checked_on_save);
     RUN_TEST(test_relay_count);
     RUN_TEST(test_ranges);
     RUN_TEST(test_serialize_round_trip);

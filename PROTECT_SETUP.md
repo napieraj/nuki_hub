@@ -73,8 +73,12 @@ can open the door, and it shows a big red warning while the web UI has no passwo
 Saving checks everything and refuses with a message if the secret (≥ 32
 characters) or a token (≥ 16, URL-safe) is too short or still a placeholder, a
 rule lacks a device (12 hex digits) or action, `value` lacks `field`, `value2`
-lacks `field2`, or a rule would match any event from a fob (neither token nor
+lacks `field2`, key/field/value/field 2/value 2 contain anything but
+`A-Z a-z 0-9 _ . -` (they must be exactly what Protect sends, like
+`sensor_button_pressed`; labels go in *Name*), or a rule would match any event from a fob (neither token nor
 key + value; see *Allow broad rules*). Disabled rules are drafts and not checked.
+The character check only runs on save: rules stored before it existed keep
+working, and the next save asks you to fix them.
 Timings: clock skew 1–120 s (default 15 s), cooldown 1–600 s (10 s), action
 deadline 1–60 s (8 s), BLE stall 5–600 s (30 s), relay pulse 100–30000 ms (3 s).
 
