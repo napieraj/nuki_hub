@@ -424,6 +424,8 @@ namespace LockMqttLogic
     public:
         virtual ~SessionEvents() {}
         virtual void send(const uint8_t* data, size_t len) = 0;
+        // CONNECT accepted (CONNACK sent); before any later packet of the same read.
+        virtual void onConnect() {}
         // Complete PUBLISH from the client. topic is NUL-terminated; payload is not.
         virtual void onPublish(const char* topic, const uint8_t* payload, size_t len) = 0;
         // lockAction subscription granted (qos 0..2) or removed (-1).
@@ -718,6 +720,7 @@ namespace LockMqttLogic
                 }
                 _state = State::Live;
                 _connectedMs = nowMs;
+                ev.onConnect();
                 return true;
             }
 

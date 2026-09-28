@@ -9,6 +9,9 @@
 #include <ctype.h>
 #include "hal/wdt_hal.h"
 #include "util/NukiHelper.h"
+#ifdef NUKI_HUB_EMBEDDED_LOCK_MQTT
+#include "LockMqttServer.h"
+#endif
 
 extern bool forceEnableWebServer;
 extern const uint8_t x509_crt_imported_bundle_bin_start[] asm("_binary_x509_crt_bundle_start");
@@ -1624,7 +1627,12 @@ const bool NukiNetworkLock::comparePrefixedPath(const char *fullPath, const char
 
 void NukiNetworkLock::publishOffAction(const int value)
 {
+#ifdef NUKI_HUB_EMBEDDED_LOCK_MQTT
+    // In-process: straight to the lock's session on the embedded server.
+    LockMqttServer::publishLockAction(value);
+#else
     _network->publishInt(_nukiOfficial->getMqttPath(), mqtt_topic_official_lock_action, value, false);
+#endif
 }
 
 void NukiNetworkLock::publishOverrideDoorSensorOverrideResult(const char* result)

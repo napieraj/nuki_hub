@@ -14,6 +14,9 @@
 #include "WaveshareBoard.h"
 #include "ProtectWebhook.h"
 #include "ForkSettings.h"
+#ifdef NUKI_HUB_EMBEDDED_LOCK_MQTT
+#include "LockMqttServer.h"
+#endif
 #include "esp32-hal-log.h"
 #include "esp32-hal-bt-mem.h"
 #include "hal/wdt_hal.h"
@@ -1588,6 +1591,10 @@ void setup()
 #ifdef NUKI_HUB_PROTECT_WEBHOOK
     ForkSettings::begin();
 #endif
+#ifdef NUKI_HUB_EMBEDDED_LOCK_MQTT
+    // Before the lock objects read the hybrid settings.
+    LockMqttServer::syncHybridPreferences(preferences);
+#endif
     initializeRestartReason();
 
     if(esp_reset_reason() == esp_reset_reason_t::ESP_RST_PANIC ||
@@ -1824,6 +1831,9 @@ void setup()
 
         nuki = new NukiWrapper("NukiHub", deviceIdLock, bleScanner, networkLock, nukiOfficial, gpio, preferences, CharBuffer::get(), buffer_size);
         nuki->initialize();
+#ifdef NUKI_HUB_EMBEDDED_LOCK_MQTT
+        LockMqttServer::begin(networkLock, preferences);
+#endif
     }
 
     Log->println(openerEnabled ? F("Nuki Opener enabled") : F("Nuki Opener disabled"));

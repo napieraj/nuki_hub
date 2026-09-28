@@ -11,6 +11,9 @@
 #include "WaveshareBoard.h"
 #include "util/NukiHelper.h"
 #include "ArduinoJson.h"
+#ifdef NUKI_HUB_EMBEDDED_LOCK_MQTT
+#include "LockMqttServer.h"
+#endif
 #include <time.h>
 #include "lwip/sockets.h"
 #include "lwip/inet.h"
@@ -415,6 +418,27 @@ esp_err_t ProtectWebhook::handle(PsychicRequest* request, PsychicResponse* resp)
             return reply(500, "error"); // not reached: no relays, validation refuses relay rules
 #endif
         }
+
+#ifdef NUKI_HUB_EMBEDDED_LOCK_MQTT
+        // 7. Redundant lock/unlock: only while the lock's MQTT session is live
+        // and its state is fresh (never from the BLE cache, which can be
+        // 30 min old). After replay/cooldown, so a skip counts as a press.
+        if(s.lockMqttEnabled && s.skipRedundant && _nuki->lockActionAllowed(rule->action))
+        {
+            LockMqttLogic::LiveState live;
+            int64_t stateAgeMs;
+            LockMqttServer::liveState(live, stateAgeMs);
+            const LockMqttLogic::Skip skip = LockMqttLogic::redundantAction(rule->action, live, (int64_t)s.lockSilenceMs);
+            if(skip != LockMqttLogic::Skip::Send)
+            {
+                const bool locked = skip == LockMqttLogic::Skip::AlreadyLocked;
+                Log->printf("Protect webhook: %s -> skipped, already %s (MQTT state %lld ms old, lock last heard %lld ms ago)\n",
+                            rule->action, locked ? "locked" : "unlocked", (long long)stateAgeMs, (long long)live.lastRxAgeMs);
+                ledFeedback(true);
+                return reply(200, locked ? "skipped_locked" : "skipped_unlocked");
+            }
+        }
+#endif
 
         // Drop the action if the lock can't be reached in time: a press
         // shouldn't unlock the door long after the user gave up.

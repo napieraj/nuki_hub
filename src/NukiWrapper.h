@@ -47,6 +47,8 @@ public:
     LockActionResult requestLockAction(const char* action, int64_t deadlineTs);
     // An action is queued or still being sent (including retries).
     bool isLockActionPending() const;
+    // Nuki Lock Access Control allows this action (same table as onLockActionReceived).
+    bool lockActionAllowed(const char* action);
 #endif
     const bool hasKeypad() const;
     bool hasDoorSensor() const;
@@ -191,6 +193,13 @@ private:
     int64_t _nextLockActionDeadlineTs = 0;
     NukiLock::LockAction _nextLockActionDeadlineFor = (NukiLock::LockAction)0xff;
     portMUX_TYPE _nextLockActionDeadlineMux = portMUX_INITIALIZER_UNLOCKED;
+#endif
+#ifdef NUKI_HUB_EMBEDDED_LOCK_MQTT
+    // Hybrid action over the embedded lock MQTT server not confirmed in time.
+    void lockMqttFallback();
+    bool _lastActionViaMqtt = false;  // set by onLockActionReceived (webhook: httpd task)
+    int64_t _offDeadlineTs = 0;       // webhook deadline for the BLE fallback of one MQTT send,
+    int64_t _offDeadlineKey = 0;      // identified by its offCommandExecutedTs; under the deadline mux
 #endif
     GpioAction gpioAction = GpioAction::None;
     std::vector<uint8_t> _pinsHighWhenDoorOpen;

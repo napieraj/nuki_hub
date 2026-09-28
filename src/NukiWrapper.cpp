@@ -14,6 +14,9 @@
 #ifdef NUKI_HUB_PROTECT_WEBHOOK
 #include "ProtectWebhookLogic.h"
 #include "ProtectTiming.h"
+#ifdef NUKI_HUB_EMBEDDED_LOCK_MQTT
+#include "LockMqttServer.h"
+#endif
 static_assert(Nuki::CmdResult::NotPaired == ProtectWebhookLogic::CMD_RESULT_NOT_PAIRED, "CmdResult values changed");
 static_assert((uint8_t)NukiLock::LockAction::Unlatch == 0x03 && (uint8_t)NukiLock::LockAction::LockNgoUnlatch == 0x05 &&
               (uint8_t)NukiLock::LockAction::FobAction1 == 0x81 && (uint8_t)NukiLock::LockAction::FobAction3 == 0x83 &&
@@ -23,6 +26,16 @@ static_assert((uint8_t)NukiLock::LockAction::Unlatch == 0x03 && (uint8_t)NukiLoc
 #endif
 
 NukiWrapper* nukiInst = nullptr;
+
+// Hybrid mode sends lock actions over official MQTT while the lock is
+// connected. With the embedded lock MQTT server the session must also be live
+// and subscribed to lockAction ("Allow locking" in the Nuki app), and the
+// action one the MQTT API takes (1-6: no fob actions); otherwise BLE.
+#ifdef NUKI_HUB_EMBEDDED_LOCK_MQTT
+#define OFF_ACTIONS_LIVE_FOR(a) (_nukiOfficial->getOffConnected() && (uint8_t)(a) >= 1 && (uint8_t)(a) <= 6 && LockMqttServer::canSendLockAction())
+#else
+#define OFF_ACTIONS_LIVE_FOR(a) (_nukiOfficial->getOffConnected())
+#endif
 
 NukiWrapper::NukiWrapper(const std::string& deviceName, NukiDeviceId* deviceId, BleScanner::Scanner* scanner, NukiNetworkLock* network, NukiOfficial* nukiOfficial, Gpio* gpio, Preferences* preferences, char* buffer, size_t bufferSize)
     : _deviceName(deviceName),
@@ -308,6 +321,9 @@ void NukiWrapper::checkLockAction(const int64_t& ts)
     if(_nukiOfficial->getOffCommandExecutedTs() > 0 && ts >= _nukiOfficial->getOffCommandExecutedTs())
     {
         _nextLockAction = _offCommand;
+#ifdef NUKI_HUB_EMBEDDED_LOCK_MQTT
+        lockMqttFallback();
+#endif
         _nukiOfficial->clearOffCommandExecutedTs();
     }
     if(_nextLockAction != (NukiLock::LockAction)0xff)
@@ -322,6 +338,9 @@ void NukiWrapper::checkLockAction(const int64_t& ts)
         Nuki::CmdResult ambiguousResult = Nuki::CmdResult::Error;
         const uint8_t timedAction = (uint8_t)_nextLockAction;
         ProtectTiming::onBleStart(timedAction);
+#ifdef NUKI_HUB_EMBEDDED_LOCK_MQTT
+        LockMqttServer::noteBleCommand();
+#endif
 #endif
 
         Nuki::CmdResult result = _nukiRetryHandler->retryComm([&]()
@@ -1279,6 +1298,9 @@ LockActionResult NukiWrapper::requestLockAction(const char *action, int64_t dead
     // it up (or MQTT may send it) before this call returns.
     ProtectTiming::onWebhookAction(action != nullptr ? (uint8_t)NukiHelper::lockActionToEnum(action) : 0xff, action);
 
+#ifdef NUKI_HUB_EMBEDDED_LOCK_MQTT
+    _lastActionViaMqtt = false;
+#endif
     // Same path (and ACL) as an MQTT lock action.
     LockActionResult result = onLockActionReceived(action);
     if(result != LockActionResult::Success)
@@ -1286,12 +1308,57 @@ LockActionResult NukiWrapper::requestLockAction(const char *action, int64_t dead
         clearLockActionDeadline();
         ProtectTiming::cancel();
     }
+#ifdef NUKI_HUB_EMBEDDED_LOCK_MQTT
+    else if(_lastActionViaMqtt)
+    {
+        // Sent to the lock over MQTT: nothing is queued for BLE. The deadline
+        // only applies to a BLE fallback of exactly this send (a GPIO action
+        // later must not inherit it).
+        const int64_t key = _nukiOfficial->getOffCommandExecutedTs();
+        clearLockActionDeadline();
+        taskENTER_CRITICAL(&_nextLockActionDeadlineMux);
+        _offDeadlineTs = deadlineTs;
+        _offDeadlineKey = key;
+        taskEXIT_CRITICAL(&_nextLockActionDeadlineMux);
+    }
+#endif
     return result;
 }
 
 bool NukiWrapper::isLockActionPending() const
 {
+#ifdef NUKI_HUB_EMBEDDED_LOCK_MQTT
+    // An MQTT action waiting for the lock's confirmation counts too: the lock
+    // runs one command at a time, and its BLE fallback may still follow.
+    if(_nukiOfficial->getOffCommandExecutedTs() > 0)
+    {
+        return true;
+    }
+#endif
     return _nextLockAction != (NukiLock::LockAction)0xff;
+}
+
+bool NukiWrapper::lockActionAllowed(const char* action)
+{
+    if(action == nullptr)
+    {
+        return false;
+    }
+    uint32_t aclPrefs[17] = {0};
+    _preferences->getBytes(preference_acl, &aclPrefs, sizeof(aclPrefs));
+    switch(NukiHelper::lockActionToEnum(action))
+    {
+    case NukiLock::LockAction::Lock:           return aclPrefs[0] == 1;
+    case NukiLock::LockAction::Unlock:         return aclPrefs[1] == 1;
+    case NukiLock::LockAction::Unlatch:        return aclPrefs[2] == 1;
+    case NukiLock::LockAction::LockNgo:        return aclPrefs[3] == 1;
+    case NukiLock::LockAction::LockNgoUnlatch: return aclPrefs[4] == 1;
+    case NukiLock::LockAction::FullLock:       return aclPrefs[5] == 1;
+    case NukiLock::LockAction::FobAction1:     return aclPrefs[6] == 1;
+    case NukiLock::LockAction::FobAction2:     return aclPrefs[7] == 1;
+    case NukiLock::LockAction::FobAction3:     return aclPrefs[8] == 1;
+    default:                                   return false;
+    }
 }
 
 bool NukiWrapper::lockActionExpired(const int64_t& ts)
@@ -1309,6 +1376,40 @@ void NukiWrapper::clearLockActionDeadline()
     taskENTER_CRITICAL(&_nextLockActionDeadlineMux);
     _nextLockActionDeadlineTs = 0;
     _nextLockActionDeadlineFor = (NukiLock::LockAction)0xff;
+    taskEXIT_CRITICAL(&_nextLockActionDeadlineMux);
+}
+#endif
+
+#ifdef NUKI_HUB_EMBEDDED_LOCK_MQTT
+// Nuki task: the lock didn't confirm an MQTT lock action within 2 s
+// (lockActionEvent or commandResponse 0), and _nextLockAction now holds it
+// for upstream's "retry over BLE". If the lock acknowledged the PUBLISH
+// (PUBREC/PUBACK), it has the command and may be running it: send-once
+// actions (unlatching, locking) are then not repeated over BLE.
+void NukiWrapper::lockMqttFallback()
+{
+    const uint8_t action = (uint8_t)_nextLockAction;
+    char name[20] = {0};
+    NukiLock::lockactionToString(_nextLockAction, name);
+    const bool received = LockMqttServer::lastLockActionReceived();
+    if(received && ProtectWebhookLogic::lockActionSentOnce(action))
+    {
+        Log->printf("Lock MQTT: the lock received %s but didn't confirm it within 2 s; not re-sent over BLE (it may have run)\n", name);
+        _nextLockAction = (NukiLock::LockAction)0xff;
+        _network->publishRetry("ambiguous");
+        ProtectTiming::cancel();
+        return;
+    }
+    Log->printf("Lock MQTT: no confirmation for %s within 2 s%s, sending it over BLE\n", name,
+                received ? " (the lock received it)" : "");
+    ProtectTiming::onMqttFallbackToBle(action);
+    taskENTER_CRITICAL(&_nextLockActionDeadlineMux);
+    if(_offDeadlineKey != 0 && _offDeadlineKey == _nukiOfficial->getOffCommandExecutedTs())
+    {
+        _nextLockActionDeadlineTs = _offDeadlineTs;
+        _nextLockActionDeadlineFor = _nextLockAction;
+    }
+    _offDeadlineKey = 0;
     taskEXIT_CRITICAL(&_nextLockActionDeadlineMux);
 }
 #endif
@@ -1342,7 +1443,7 @@ LockActionResult NukiWrapper::onLockActionReceived(const char *value)
 
     if((action == NukiLock::LockAction::Lock && (int)aclPrefs[0] == 1) || (action == NukiLock::LockAction::Unlock && (int)aclPrefs[1] == 1) || (action == NukiLock::LockAction::Unlatch && (int)aclPrefs[2] == 1) || (action == NukiLock::LockAction::LockNgo && (int)aclPrefs[3] == 1) || (action == NukiLock::LockAction::LockNgoUnlatch && (int)aclPrefs[4] == 1) || (action == NukiLock::LockAction::FullLock && (int)aclPrefs[5] == 1) || (action == NukiLock::LockAction::FobAction1 && (int)aclPrefs[6] == 1) || (action == NukiLock::LockAction::FobAction2 && (int)aclPrefs[7] == 1) || (action == NukiLock::LockAction::FobAction3 && (int)aclPrefs[8] == 1))
     {
-        if(!_nukiOfficial->getOffConnected())
+        if(!OFF_ACTIONS_LIVE_FOR(action))
         {
             nukiInst->_nextLockAction = action;
         }
@@ -1355,6 +1456,9 @@ LockActionResult NukiWrapper::onLockActionReceived(const char *value)
                     _nukiOfficial->setOffCommandExecutedTs(espMillis() + 2000);
                     _offCommand = action;
                 }
+#ifdef NUKI_HUB_EMBEDDED_LOCK_MQTT
+                _lastActionViaMqtt = true;
+#endif
                 _network->publishOffAction((int)action);
             }
             else
@@ -2447,7 +2551,7 @@ void NukiWrapper::checkGpioAction()
     switch(gpioAction)
     {
     case GpioAction::Lock:
-        if(!_nukiOfficial->getOffConnected())
+        if(!OFF_ACTIONS_LIVE_FOR(NukiLock::LockAction::Lock))
         {
             nukiInst->lock();
         }
@@ -2459,7 +2563,7 @@ void NukiWrapper::checkGpioAction()
         }
         break;
     case GpioAction::Unlock:
-        if(!_nukiOfficial->getOffConnected())
+        if(!OFF_ACTIONS_LIVE_FOR(NukiLock::LockAction::Unlock))
         {
             nukiInst->unlock();
         }
@@ -2471,7 +2575,7 @@ void NukiWrapper::checkGpioAction()
         }
         break;
     case GpioAction::Unlatch:
-        if(!_nukiOfficial->getOffConnected())
+        if(!OFF_ACTIONS_LIVE_FOR(NukiLock::LockAction::Unlatch))
         {
             nukiInst->unlatch();
         }
@@ -2483,7 +2587,7 @@ void NukiWrapper::checkGpioAction()
         }
         break;
     case GpioAction::LockNgo:
-        if(!_nukiOfficial->getOffConnected())
+        if(!OFF_ACTIONS_LIVE_FOR(NukiLock::LockAction::LockNgo))
         {
             nukiInst->lockngo();
         }
@@ -2495,7 +2599,7 @@ void NukiWrapper::checkGpioAction()
         }
         break;
     case GpioAction::LockNgoUnlatch:
-        if(!_nukiOfficial->getOffConnected())
+        if(!OFF_ACTIONS_LIVE_FOR(NukiLock::LockAction::LockNgoUnlatch))
         {
             nukiInst->lockngounlatch();
         }

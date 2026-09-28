@@ -105,6 +105,9 @@ private:
     esp_err_t buildForkSettingsHtml(PsychicRequest *request, PsychicResponse* resp, const ForkSettingsLogic::Settings* shown = nullptr, const String& message = "", bool error = false);
     esp_err_t processForkSettings(PsychicRequest *request, PsychicResponse* resp);
     bool forkSettingsParse(PsychicRequest *request, ForkSettingsLogic::Settings& s, char* err, size_t errLen);
+#ifdef NUKI_HUB_EMBEDDED_LOCK_MQTT
+    void buildLockMqttSection(PsychicStreamResponse* response, const ForkSettingsLogic::Settings& s, const ForkSettingsLogic::Settings& stored);
+#endif
 #endif
 
     NukiWrapper* _nuki = nullptr;
