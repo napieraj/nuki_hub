@@ -274,10 +274,12 @@ void NukiNetwork::initialize()
         char gpioPath[250];
         bool rebGpio = rebuildGpio();
 
+#ifndef NUKI_HUB_NO_EXTERNAL_MQTT
         if(rebGpio)
         {
             Log->println("Rebuild MQTT GPIO structure");
         }
+#endif
         for (const auto &pinEntry: _gpio->pinConfiguration())
         {
             switch (pinEntry.role)
@@ -404,10 +406,15 @@ void NukiNetwork::setMQTTConnectionSettings()
         }
     }
 
+#ifdef NUKI_HUB_NO_EXTERNAL_MQTT
+    // The broker settings above are unused: there is no MQTT client.
+    Log->println("External MQTT client compiled out (no broker connection)");
+#else
     Log->print("MQTT Broker: ");
     Log->print(_mqttBrokerAddr);
     Log->print(":");
     Log->println(_mqttPort);
+#endif
 
 #ifndef NUKI_HUB_UPDATER
     _device->mqttOnConnect([&](bool sessionPresent)
