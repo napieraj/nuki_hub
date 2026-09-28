@@ -1,6 +1,7 @@
 ## Single-board build: Waveshare ESP32-S3-POE-ETH-8DI-8RO
 
-`pio run -e esp32-s3-waveshare-8di8ro`
+`pio run -e esp32-s3-waveshare-8di8ro`, log: `pio device monitor -e esp32-s3-waveshare-8di8ro`
+(this is the default environment in this fork, so `-e` can be left out).
 
 Step-by-step setup from an empty board: **`SETUP.md`**.
 

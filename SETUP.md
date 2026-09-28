@@ -75,7 +75,10 @@ Optional check of the webhook logic on your computer: `pio test -e native`.
      0x0 nuki_hub_bootloader_esp32s3oct.bin 0x8000 nuki_hub_partitions_esp32s3oct.bin \
      0xe000 boot_app0.bin 0x10000 nuki_hub_esp32s3oct.bin
    ```
-4. Watch the log: `pio device monitor -b 115200`. If it's quiet, power-cycle the board.
+4. Watch the log: `pio device monitor -e esp32-s3-waveshare-8di8ro` (115200 baud,
+   decodes crash backtraces with this build's firmware.elf; it is the default
+   environment, so plain `pio device monitor` does the same). If it's quiet,
+   power-cycle the board.
 
 **Later updates** also go over USB: build, then step 4.3 without the erase.
 Settings and the lock pairing are kept. The web UI's upload only accepts a Nuki
