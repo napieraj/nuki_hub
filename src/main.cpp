@@ -609,7 +609,12 @@ void startWebServer()
 
     if (!nuki_hub_https_server_enabled)
     {
+#if defined(NUKI_HUB_WAVESHARE_8DI8RO) && !defined(NUKI_HUB_HTTPS_SERVER)
+        // Fork: this build leaves the HTTPS server out (Protect needs plain HTTP).
+        Log->println("HTTPS server not compiled in");
+#else
         Log->println("Not running on PSRAM enabled device");
+#endif
     }
     else
     {

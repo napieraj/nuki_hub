@@ -375,7 +375,7 @@ void ForkSettings::state(State& out)
 
 bool ForkSettings::save(const Settings& s, char* err, size_t errLen)
 {
-    if(!validate(s, caps(), err, errLen))
+    if(!validateForSave(s, caps(), err, errLen))
     {
         return false;
     }

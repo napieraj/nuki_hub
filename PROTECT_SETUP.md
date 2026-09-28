@@ -65,7 +65,8 @@ can open the door, and it shows a big red warning while the web UI has no passwo
   `sensor_button_pressed`, device `<fob MAC>`, field `button` = `right`,
   field 2 `value` = `longPress`, action `unlock`. One fob per person, so the fob
   is the identity. Actions: the Nuki lock actions, or `relay1`..`relayN` (N =
-  "Relays available to rules").
+  "Relays available to rules"). The *Name* is only a label and may use any
+  text (stored as UTF-8, at most 32 bytes: `é` takes 2, `→` 3).
 - **Webhook enabled**: the master switch. The status box at the top says whether
   the webhook is active and, if not, why (no secret, invalid rule, switched off),
   plus the clock, the BLE task and the last 10 requests.
@@ -73,8 +74,12 @@ can open the door, and it shows a big red warning while the web UI has no passwo
 Saving checks everything and refuses with a message if the secret (≥ 32
 characters) or a token (≥ 16, URL-safe) is too short or still a placeholder, a
 rule lacks a device (12 hex digits) or action, `value` lacks `field`, `value2`
-lacks `field2`, or a rule would match any event from a fob (neither token nor
+lacks `field2`, key/field/value/field 2/value 2 contain anything but
+`A-Z a-z 0-9 _ . -` (they must be exactly what Protect sends, like
+`sensor_button_pressed`; labels go in *Name*), or a rule would match any event from a fob (neither token nor
 key + value; see *Allow broad rules*). Disabled rules are drafts and not checked.
+The character check only runs on save: rules stored before it existed keep
+working, and the next save asks you to fix them.
 Timings: clock skew 1–120 s (default 15 s), cooldown 1–600 s (10 s), action
 deadline 1–60 s (8 s), BLE stall 5–600 s (30 s), relay pulse 100–30000 ms (3 s).
 
@@ -168,7 +173,11 @@ One alarm per rule (e.g. "Fob A - Hold Right", "Fob A - Press Right"):
   retried only if they provably never reached the lock (not paired); otherwise
   the log shows `Lock action result: timeOut`, then e.g.
   `Lock: result ambiguous (TIMEOUT), not retrying` (or `Unlatch: ...`, with
-  `FAILED` / `LOCK_BUSY` / `ERROR`), and MQTT `lock/retry` reads `ambiguous`.
+  `FAILED` / `LOCK_BUSY` / `ERROR`) and `Lock: action may have run, not
+  retried`, with no `Last command failed, retrying ...` lines after it; MQTT
+  `lock/retry` reads `ambiguous`. A retried action logs `Retry 1 of 3` ..
+  `Retry 3 of 3`, then `Lock: Last command failed, no retries left (3 retries
+  done)` if the last attempt fails too.
   Check the lock state and press again if needed. `unlock` is still retried: a
   second unlock of an unlocked lock doesn't move the motor. This applies to every
   source (webhook, GPIO inputs, MQTT).

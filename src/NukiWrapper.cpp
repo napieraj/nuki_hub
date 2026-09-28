@@ -355,6 +355,7 @@ void NukiWrapper::checkLockAction(const int64_t& ts)
              if(expired || lockActionExpired(espMillis()))
              {
                  expired = true;
+                 _nukiRetryHandler->stopRetrying();
                  return Nuki::CmdResult::Error;
              }
 #endif
@@ -376,6 +377,7 @@ void NukiWrapper::checkLockAction(const int64_t& ts)
                              ProtectWebhookLogic::cmdResultLogName((uint8_t)cmdResult));
                  ambiguous = true;
                  ambiguousResult = cmdResult;
+                 _nukiRetryHandler->stopRetrying();
              }
              else
 #endif

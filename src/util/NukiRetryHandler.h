@@ -9,6 +9,11 @@ public:
     NukiRetryHandler(std::string reference, Gpio* gpio, std::vector<uint8_t> pinsComm, std::vector<uint8_t> pinsCommError, int nrOfRetries, int retryDelay);
 
     const Nuki::CmdResult retryComm(std::function<Nuki::CmdResult ()> func);
+#ifdef NUKI_HUB_PROTECT_WEBHOOK
+    // Called from inside func(): its failure is final (send-once action with
+    // an ambiguous result, or the action expired). retryComm returns at once.
+    void stopRetrying() { _stopRetrying = true; }
+#endif
 
 
 private:
@@ -21,4 +26,7 @@ private:
     int _retryDelay = 0;
     std::vector<uint8_t> _pinsComm;
     std::vector<uint8_t> _pinsCommError;
+#ifdef NUKI_HUB_PROTECT_WEBHOOK
+    bool _stopRetrying = false;
+#endif
 };

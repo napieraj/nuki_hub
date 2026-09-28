@@ -311,6 +311,22 @@ namespace ForkSettingsLogic
         return true;
     }
 
+    // Protect trigger keys, field names and values are identifiers or numbers
+    // (sensor_button_pressed, button, right, longPress, 2): A-Z a-z 0-9 _ . -
+    inline bool isMatchText(const char* s)
+    {
+        for(const char* p = s; *p; p++)
+        {
+            const char c = *p;
+            if(!(c >= 'A' && c <= 'Z') && !(c >= 'a' && c <= 'z') && !(c >= '0' && c <= '9') &&
+               c != '_' && c != '.' && c != '-')
+            {
+                return false;
+            }
+        }
+        return true;
+    }
+
     // Printable ASCII (MQTT user name, password, client ID as typed in the Nuki app).
     inline bool isPrintableAscii(const char* s)
     {
@@ -435,6 +451,39 @@ namespace ForkSettingsLogic
         return true;
     }
 
+    // Save-time check of what a rule compares against the trigger (key,
+    // field, value, field2, value2): a label typed there would save fine and
+    // then never match. Only on save, so settings stored before this check
+    // keep loading. i is the 0-based slot.
+    inline bool validateRuleText(const Settings& s, size_t i, char* err, size_t errLen)
+    {
+        const Rule& r = s.rules[i];
+        const int n = (int)i + 1;
+        if(!isMatchText(r.key))
+        {
+            snprintf(err, errLen, "Rule %d: the key may only contain A-Z a-z 0-9 _ . - "
+                     "(Protect sends e.g. sensor_button_pressed; labels go in Name)", n);
+            return false;
+        }
+        const struct
+        {
+            const char* label;
+            const char* text;
+        } texts[] = {
+            { "field", r.field }, { "value", r.value }, { "field 2", r.field2 }, { "value 2", r.value2 },
+        };
+        for(const auto& t : texts)
+        {
+            if(!isMatchText(t.text))
+            {
+                snprintf(err, errLen, "Rule %d: %s may only contain A-Z a-z 0-9 _ . - "
+                         "(e.g. button, right, value, longPress)", n, t.label);
+                return false;
+            }
+        }
+        return true;
+    }
+
     inline bool validateLockMqtt(const Settings& s, char* err, size_t errLen)
     {
         if(!inRange(s.lockSilenceMs, LOCK_SILENCE_MS))
@@ -532,6 +581,24 @@ namespace ForkSettingsLogic
             }
         }
         return validateLockMqtt(s, err, errLen);
+    }
+
+    // validate() plus the checks that only apply to a new save (enabled
+    // rules only; disabled rules are drafts).
+    inline bool validateForSave(const Settings& s, const Caps& caps, char* err, size_t errLen)
+    {
+        if(!validate(s, caps, err, errLen))
+        {
+            return false;
+        }
+        for(size_t i = 0; i < MAX_RULES; i++)
+        {
+            if(s.rules[i].enabled && !validateRuleText(s, i, err, errLen))
+            {
+                return false;
+            }
+        }
+        return true;
     }
 
     // --- NVS format: one blob, so a save is all-or-nothing -----------------

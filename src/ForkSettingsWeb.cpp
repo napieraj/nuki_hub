@@ -318,7 +318,9 @@ bool WebCfgServer::forkSettingsParse(PsychicRequest* request, Settings& s, char*
             snprintf(name, sizeof(name), "R%u_%s", n, t.suffix);
             if(!setTrimmed(t.dst, t.cap, param(request, name).c_str()))
             {
-                snprintf(err, errLen, "Rule %u: %s is too long (max %u characters)", n + 1, t.label, (unsigned)(t.cap - 1));
+                // Bytes, not characters: UTF-8 text is refused whole, never cut.
+                snprintf(err, errLen, "Rule %u: %s is too long (max %u bytes; &eacute; or &rarr; take 2-3)", n + 1,
+                         t.label, (unsigned)(t.cap - 1));
                 return false;
             }
         }
@@ -539,12 +541,15 @@ esp_err_t WebCfgServer::buildForkSettingsHtml(PsychicRequest* request, PsychicRe
     const bool totpAvailable = _importExport->getTOTPEnabled();
     const bool mfaApproval = _preferences->getBool(preference_cred_duo_approval, false) && (totpAvailable || _duoEnabled);
 
+    // UTF-8 page, so the browser submits UTF-8 (without it, text outside
+    // Latin-1, such as an arrow, arrives as the literal "&#8594;").
     const char* script =
+        "<meta charset=\"utf-8\">"
         "<script>function fsGen(n,b){var a=new Uint8Array(b);crypto.getRandomValues(a);var h='';"
         "for(var i=0;i<a.length;i++){h+=('0'+a[i].toString(16)).slice(-2);}"
         "var e=document.getElementsByName(n)[0];e.value=h;e.focus();e.select();}</script>";
 
-    PsychicStreamResponse response(resp, "text/html");
+    PsychicStreamResponse response(resp, "text/html; charset=utf-8");
     response.beginSend();
     buildHtmlHeader(&response, script);
 
@@ -651,7 +656,7 @@ esp_err_t WebCfgServer::buildForkSettingsHtml(PsychicRequest* request, PsychicRe
     }
     response.print("<br>");
 
-    response.print("<form method=\"post\" action=\"/post?page=forkcfg\" autocomplete=\"off\">");
+    response.print("<form method=\"post\" action=\"/post?page=forkcfg\" accept-charset=\"utf-8\" autocomplete=\"off\">");
     response.print("<input type=\"hidden\" name=\"FORKCFG\" value=\"1\">");
     response.print("<input type=\"hidden\" name=\"FSCSRF\" value=\"");
     response.print(csrf());
@@ -767,7 +772,7 @@ esp_err_t WebCfgServer::buildForkSettingsHtml(PsychicRequest* request, PsychicRe
         snprintf(name, sizeof(name), "R%u_EN", n);
         printCheckBox(&response, name, "Enabled", r.enabled, "");
         snprintf(name, sizeof(name), "R%u_NAME", n);
-        printInputField(&response, name, "Name (label only)", esc(r.name).c_str(), LEN_NAME, "");
+        printInputField(&response, name, "Name (label only; max. 32 bytes, &eacute; or &rarr; take 2-3)", esc(r.name).c_str(), LEN_NAME, "");
         const Rule& storedRule = stored->rules[i];
         printParameter(&response, "Token (?r=)", writeOnlyStatus(storedRule.token).c_str());
         snprintf(name, sizeof(name), "R%u_TOK", n);
@@ -810,7 +815,7 @@ esp_err_t WebCfgServer::buildForkSettingsHtml(PsychicRequest* request, PsychicRe
     response.print("</fieldset></form>");
 
     // Always available, also when locked: switching off only makes it safer.
-    response.print("<br><form method=\"post\" action=\"/post?page=forkcfg\" onsubmit=\"return confirm('Switch the Protect webhook off?');\">");
+    response.print("<br><form method=\"post\" action=\"/post?page=forkcfg\" accept-charset=\"utf-8\" onsubmit=\"return confirm('Switch the Protect webhook off?');\">");
     response.print("<input type=\"hidden\" name=\"FORKCFG\" value=\"1\"><input type=\"hidden\" name=\"FS_ACTION\" value=\"off\">");
     response.print("<input type=\"hidden\" name=\"FSCSRF\" value=\"");
     response.print(csrf());

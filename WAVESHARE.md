@@ -1,6 +1,7 @@
 ## Single-board build: Waveshare ESP32-S3-POE-ETH-8DI-8RO
 
-`pio run -e esp32-s3-waveshare-8di8ro`
+`pio run -e esp32-s3-waveshare-8di8ro`, log: `pio device monitor -e esp32-s3-waveshare-8di8ro`
+(this is the default environment in this fork, so `-e` can be left out).
 
 Step-by-step setup from an empty board: **`SETUP.md`**.
 
@@ -27,7 +28,9 @@ fallback. See "Nuki lock MQTT" below.
   no "MQTT Configuration" pages or "MQTT Connected" row. The only MQTT on the
   board is the lock's session on the built-in server. What is left of the
   upstream publishing code (NukiNetworkLock builds its JSON, then `publish()`
-  returns at once) is inert. The web serial log still works.
+  returns at once) is inert. The web serial log still works. The boot log says
+  `External MQTT client compiled out (no broker connection)` instead of
+  `MQTT Broker: <host>:<port>`.
 - No HTTPS server (`NUKI_HUB_HTTPS_SERVER` unset): Protect needs plain HTTP on
   port 80, and a certificate would turn port 80 into a redirect. The OTA
   download task isn't built either (updates are USB-only).
