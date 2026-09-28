@@ -555,7 +555,14 @@ void NukiWrapper::update(bool reboot)
     checkDoorSensorOverride();
     checkLockStateUpdate(ts, queryCommands);
 
+#ifdef NUKI_HUB_NO_EXTERNAL_MQTT
+    // No external MQTT client in this build, so it is never "connected": run
+    // the periodic queries anyway. The config query is what stores the lock's
+    // Nuki ID, which the embedded lock MQTT server needs for its topics.
+    if(true)
+#else
     if(_network->mqttConnectionState() == 2)
+#endif
     {
         checkQueries(ts, queryCommands);
         if(_clearAuthData)
