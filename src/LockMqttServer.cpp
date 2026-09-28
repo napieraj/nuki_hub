@@ -654,13 +654,15 @@ bool LockMqttServer::publishLockAction(int action)
             {
                 lastCommandTs = espMillis();
                 lastActionReceived = false;
+                // Still under the mutex: the server task can't handle the
+                // lock's PUBREC before the press is marked as sent over MQTT.
+                ProtectTiming::onMqttSent((uint8_t)action);
             }
         }
     }
     if(ok)
     {
         Log->printf("Lock MQTT: lockAction %d sent (QoS %u, id %u)\n", action, (unsigned)qos, (unsigned)id);
-        ProtectTiming::onMqttSent((uint8_t)action);
     }
     else
     {
