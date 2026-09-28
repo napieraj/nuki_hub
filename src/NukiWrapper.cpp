@@ -13,6 +13,7 @@
 #include "util/NukiRetryHandler.h"
 #ifdef NUKI_HUB_PROTECT_WEBHOOK
 #include "ProtectWebhookLogic.h"
+#include "ProtectTiming.h"
 static_assert(Nuki::CmdResult::NotPaired == ProtectWebhookLogic::CMD_RESULT_NOT_PAIRED, "CmdResult values changed");
 static_assert((uint8_t)NukiLock::LockAction::Unlatch == 0x03 && (uint8_t)NukiLock::LockAction::LockNgoUnlatch == 0x05 &&
               (uint8_t)NukiLock::LockAction::FobAction1 == 0x81 && (uint8_t)NukiLock::LockAction::FobAction3 == 0x83 &&
@@ -319,6 +320,8 @@ void NukiWrapper::checkLockAction(const int64_t& ts)
         // command was written): it may have run, so it is not sent again.
         bool ambiguous = false;
         Nuki::CmdResult ambiguousResult = Nuki::CmdResult::Error;
+        const uint8_t timedAction = (uint8_t)_nextLockAction;
+        ProtectTiming::onBleStart(timedAction);
 #endif
 
         Nuki::CmdResult result = _nukiRetryHandler->retryComm([&]()
@@ -368,6 +371,7 @@ void NukiWrapper::checkLockAction(const int64_t& ts)
         });
 #ifdef NUKI_HUB_PROTECT_WEBHOOK
         clearLockActionDeadline();
+        ProtectTiming::onBleEnd(timedAction, result == Nuki::CmdResult::Success);
 #endif
 
         if(result == Nuki::CmdResult::Success)
@@ -1271,11 +1275,16 @@ LockActionResult NukiWrapper::requestLockAction(const char *action, int64_t dead
     _nextLockActionDeadlineFor = deadlineFor;
     taskEXIT_CRITICAL(&_nextLockActionDeadlineMux);
 
+    // Timing starts before the action is handed over: the nuki task may pick
+    // it up (or MQTT may send it) before this call returns.
+    ProtectTiming::onWebhookAction(action != nullptr ? (uint8_t)NukiHelper::lockActionToEnum(action) : 0xff, action);
+
     // Same path (and ACL) as an MQTT lock action.
     LockActionResult result = onLockActionReceived(action);
     if(result != LockActionResult::Success)
     {
         clearLockActionDeadline();
+        ProtectTiming::cancel();
     }
     return result;
 }
