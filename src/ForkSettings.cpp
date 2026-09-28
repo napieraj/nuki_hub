@@ -110,6 +110,7 @@ namespace
     Settings current;                 // guarded by mutex
     ForkSettings::State currentState; // guarded by mutex
     ForkSettings::Source loadedFrom = ForkSettings::Source::Defaults;
+    volatile uint32_t settingsGeneration = 0;
 
     // Settings is ~4 KB: never on a task stack.
     std::unique_ptr<Settings> newSettings()
@@ -209,6 +210,7 @@ namespace
         }
         current = s;
         computeState(current, currentState);
+        settingsGeneration = settingsGeneration + 1;
         ProtectWebhook::onRulesChanged(changed, MAX_RULES);
     }
 
@@ -332,6 +334,7 @@ void ForkSettings::begin()
     xSemaphoreTake(mutex, portMAX_DELAY);
     current = *s;
     computeState(current, currentState);
+    settingsGeneration = settingsGeneration + 1;
     const bool on = currentState.active;
     char reason[sizeof(currentState.reason)];
     memcpy(reason, currentState.reason, sizeof(reason));
@@ -454,6 +457,11 @@ void ForkSettings::factoryReset()
         p.clear();
         p.end();
     }
+}
+
+uint32_t ForkSettings::generation()
+{
+    return settingsGeneration;
 }
 
 ForkSettings::ReadLock::ReadLock(TickType_t wait)
