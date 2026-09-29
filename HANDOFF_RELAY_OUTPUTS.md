@@ -143,7 +143,9 @@ turner state read after each MQTT state change.
   - `NukiWrapper::updateKeyTurnerState()` after a successful read (next to the
     door-sensor GPIO writes, `NukiWrapper.cpp:736`).
   - `NukiWrapper::updateAuthData()` after `_nukiLock.getLogEntries(&log)` and
-    the sort (`:1035` and `:1056`). The byte layout is the one
+    the sort, only in the complete read 5 s after the request (`:1056`); the
+    early read 100 ms after the request (`:1035`) can miss entries still
+    arriving, which would move the index past them. The byte layout is the one
     `NukiNetworkLock::publishAuthorizationInfo` decodes (`NukiNetworkLock.cpp:742`
     keypad: `data[1]` source, `data[2]` completion, `data[3..4]` code ID;
     `:781` door sensor `data[0]` 0/1/2 = opened/closed/jammed).
