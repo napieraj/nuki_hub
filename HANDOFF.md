@@ -100,6 +100,21 @@ pio test -e native
 4. **Relay:** rule `Fob · Double Right -> Relay 1` + Protect alarm (Double Press)
    were being set up. Bench test before wiring the intercom (no click at boot,
    one ~3 s pulse, `429` within the cooldown).
+4b. **Relay state outputs** (branch `relay-outputs`, off by default, spec
+   `HANDOFF_RELAY_OUTPUTS.md`, docs `WAVESHARE.md`): not flashed yet. Settings
+   blob is now v4 (v3 loads with outputs off; flashing back an older build
+   switches the webhook off until saved). Relay 1's pulse is the old "Relay
+   pulse" value. Hardware checks: the list at the end of
+   `HANDOFF_RELAY_OUTPUTS.md` (latency with/without MQTT, no clicks at boot,
+   relays open until the first state, keypad wrong/valid code, NFC/Home Key,
+   door sensor tamper/battery, rule on a state relay refused).
+4c. **Keypad detection:** the user's newest Nuki Keypad (NFC, Home Key) shows
+   "Has keypad: No": `_hasKeypad` only reads `hasKeypad`/`hasKeypadV2` from the
+   lock config (`NukiLockConstants.h` `Config` has no other keypad field).
+   Not fixed. Check the relay section's "lock reports a keypad battery state"
+   (key turner state accessory bit 0): if yes, that bit could back a fork-only
+   detection; meanwhile upstream's "Force keypad" setting exists. Note which
+   `lockActionEvent` values a code, NFC tag and Home Key produce.
 5. Battery/BLE: upstream hybrid mode does a full BLE state read (and a log fetch on
    some states) after every MQTT state change. Trim if lock battery suffers.
 6. Door sensor: no `doorsensorState` seen over MQTT yet; open/close once and check.
@@ -127,8 +142,10 @@ pio test -e native
 - `src/LockMqttServer.cpp/.h`, `src/LockMqttLogic.h`: embedded MQTT server, skip rule.
 - `src/ProtectTiming.h`: per-press timing lines.
 - `src/WaveshareBoard.cpp/.h`: pins, W5500, relays (TCA9554), WS2812, PCF85063 RTC.
+- `src/WaveshareOutputs.cpp/.h`, `src/RelayOutputsLogic.h`: relay state outputs
+  (roles, MQTT/BLE merge, worker task).
 - Host tests: `test/test_protect_webhook`, `test_fork_settings`, `test_lock_mqtt`,
-  `test_waveshare_rtc`.
+  `test_waveshare_rtc`, `test_relay_outputs`.
 - Upstream edits are small and guarded by `NUKI_HUB_WAVESHARE_8DI8RO`,
   `NUKI_HUB_PROTECT_WEBHOOK`, `NUKI_HUB_NO_WIFI`, `NUKI_HUB_NO_EXTERNAL_MQTT`,
   `NUKI_HUB_EMBEDDED_LOCK_MQTT`.
