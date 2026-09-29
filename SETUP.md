@@ -202,6 +202,28 @@ connects to the board's IP on port 1883. Details: `PROTECT_SETUP.md` 2b and
    to save the lock's battery; the lock now reports its state itself.
    Wi-Fi costs the lock battery too (Nuki: remote access shortens battery life).
 
+### 9c. Relay state outputs (optional)
+The relays can follow the lock, door sensor and keypad (dry contacts for an
+alarm panel, lamps, …). Off by default; roles, defaults and latency:
+`WAVESHARE.md` "Relay state outputs".
+1. Prerequisites for the keypad roles and the door-sensor "jammed" part (they
+   read the lock's activity log over BLE): a **valid lock PIN** (Nuki
+   configuration; the info page must not say the PIN is invalid) and
+   **Publish auth data** on (saving a relay role that needs it switches it on;
+   it applies after a reboot). The page warns next to the relays if either is
+   missing. Step 9b (lock MQTT) makes lock and door outputs near-instant.
+2. On **Protect Webhook & Relays → Relays**: tick **Relay state outputs**, check
+   the role, **Invert** and **Pulse ms** of each relay (defaults: 1 webhook
+   pulse, 2 secure, 3 door open, 4 locked, 5 lock fault inverted, 6 battery low
+   inverted, 7 door sensor fault inverted, 8 keypad wrong code), Save. Rules
+   can only use relays with the role **Webhook pulse** (relay 1 by default,
+   e.g. "Fob · Double Right → Relay 1").
+3. The relays stay open until the first lock state after boot, then the "Now"
+   column and the Info page show closed/open per relay. The USB log shows
+   `Relay outputs: relay2 (Secure (locked + door closed)) closed` etc.
+4. Before wiring anything: power-cycle (PoE) and reflash a few times and check
+   that no relay clicks while the board boots.
+
 ### 10. Create the real alarms in Protect
 One alarm per rule, e.g. "Fob A - Hold Right" and "Fob A - Press Right":
 - Trigger: **Button**, the gesture (**Long Press (3s)** or **Press**), scope the fob's **Right** button.
@@ -258,3 +280,5 @@ One alarm per rule, e.g. "Fob A - Hold Right" and "Fob A - Press Right":
 - [ ] Bench suite 17/17, then a real fob press unlocks and locks
 - [ ] Optional: lock connected over MQTT ("Lock connected: yes"), a press logs
       `via MQTT, lock confirmed`; switching MQTT off in the app falls back to BLE
+- [ ] Optional: relay state outputs on, relays follow the lock and door, no
+      clicks during power cycles

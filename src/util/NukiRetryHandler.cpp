@@ -1,6 +1,9 @@
 #include "NukiRetryHandler.h"
 #include "Logger.h"
 #include "../ProtectWebhook.h"
+#ifdef NUKI_HUB_WAVESHARE_8DI8RO
+#include "../WaveshareOutputs.h"
+#endif
 
 NukiRetryHandler::NukiRetryHandler(std::string reference, Gpio* gpio, std::vector<uint8_t> pinsComm, std::vector<uint8_t> pinsCommError, int nrOfRetries, int retryDelay)
 : _reference(reference),
@@ -69,6 +72,11 @@ const Nuki::CmdResult NukiRetryHandler::retryComm(std::function<Nuki::CmdResult(
     }
     setCommPins(LOW);
     setCommErrorPins(LOW);
+#ifdef NUKI_HUB_WAVESHARE_8DI8RO
+    // Relay "LockFault": latched BLE comm error (the pin above is only high
+    // during retries), cleared by the next successful command.
+    WaveshareOutputs::onBleResult(cmdResult == Nuki::CmdResult::Success);
+#endif
 
     return cmdResult;
 }

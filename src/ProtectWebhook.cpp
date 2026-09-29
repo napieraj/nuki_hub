@@ -367,9 +367,13 @@ esp_err_t ProtectWebhook::handle(PsychicRequest* request, PsychicResponse* resp)
         // Relay rules pulse a relay on the board; the lock checks below
         // (BLE alive, lock busy) don't apply to them.
         const int relay = relayChannel(rule->action);
-        if(relay > (int)s.relayCount)
+        if(relay > 0 && !ForkSettingsLogic::relayAvailableToRules(s, relay, ForkSettings::caps().relays))
         {
-            // Not reached: validation refuses relayN beyond the relay count.
+            // Not reached: validation refuses relayN beyond the relay count
+            // and, with relay state outputs on, on a relay whose role isn't
+            // "Webhook pulse". Fail closed: never pulse a state output.
+            Log->printf("Protect webhook: %s refused, relay%d is not a webhook relay (%s)\n", rule->action, relay,
+                        RelayOutputsLogic::roleName(ForkSettingsLogic::effectiveRole(s, (size_t)relay - 1)));
             return reply(500, "error");
         }
         if(relay == 0)
@@ -423,7 +427,8 @@ esp_err_t ProtectWebhook::handle(PsychicRequest* request, PsychicResponse* resp)
         if(relay > 0)
         {
 #ifdef NUKI_HUB_WAVESHARE_8DI8RO
-            const bool pulsed = WaveshareBoard::pulseRelay(relay, s.relayPulseMs);
+            // The relay's own pulse (migrated from the old global pulse).
+            const bool pulsed = WaveshareBoard::pulseRelay(relay, s.relays[relay - 1].pulseMs);
             Log->printf("Protect webhook: %s -> %s\n", rule->action, pulsed ? "pulsed" : "failed");
             ledFeedback(pulsed);
             return pulsed ? reply(200, "ack") : reply(500, "error");

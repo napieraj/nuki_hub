@@ -23,6 +23,11 @@
 #include "Logger.h"
 #include "Gpio.h"
 #include "WaveshareBoard.h"
+#ifdef NUKI_HUB_WAVESHARE_8DI8RO
+#include "WaveshareOutputs.h"
+#include "RelayOutputsLogic.h"
+#include "../lib/nuki_ble/src/NukiLockUtils.h"
+#endif
 #ifdef NUKI_HUB_EMBEDDED_LOCK_MQTT
 #include "LockMqttServer.h"
 #include "LockMqttLogic.h"
@@ -217,13 +222,12 @@ bool WebCfgServer::forkSettingsParse(PsychicRequest* request, Settings& s, char*
         { "FS_COOL", "Cooldown", &s.cooldownMs },
         { "FS_DEADLINE", "Action deadline", &s.actionDeadlineMs },
         { "FS_BLESTALL", "BLE stall", &s.bleStallMs },
-        { "FS_PULSE", "Relay pulse", &s.relayPulseMs },
     };
     for(const Num& n : nums)
     {
         if(!request->hasParam(n.name))
         {
-            continue; // not on this board's form (relays)
+            continue; // not on the form
         }
         if(!parseUint(param(request, n.name).c_str(), *n.dst))
         {
@@ -241,6 +245,33 @@ bool WebCfgServer::forkSettingsParse(PsychicRequest* request, Settings& s, char*
         }
         s.relayCount = (uint8_t)v;
     }
+#ifdef NUKI_HUB_WAVESHARE_8DI8RO
+    if(request->hasParam("FS_RO_SEEN"))
+    {
+        s.relayOutputs = isParameterTrue(request, "FS_RO_EN");
+        const Caps caps = ForkSettings::caps();
+        char key[12];
+        for(unsigned i = 0; i < caps.relays && i < MAX_RELAYS; i++)
+        {
+            uint32_t role = 0;
+            uint32_t pulse = 0;
+            snprintf(key, sizeof(key), "FS_RR%u", i);
+            if(!parseUint(param(request, key).c_str(), role) || role >= RelayOutputsLogic::ROLE_COUNT)
+            {
+                snprintf(err, errLen, "Relay %u: unknown role", i + 1);
+                return false;
+            }
+            snprintf(key, sizeof(key), "FS_RP%u", i);
+            if(!parseUint(param(request, key).c_str(), pulse))
+            {
+                snprintf(err, errLen, "Relay %u: the pulse must be a whole number of milliseconds", i + 1);
+                return false;
+            }
+            snprintf(key, sizeof(key), "FS_RI%u", i);
+            applyRelayForm(s, i, (uint8_t)role, isParameterTrue(request, key), pulse);
+        }
+    }
+#endif
     if(request->hasParam("FS_LOCKDI"))
     {
         if(!parseUint(param(request, "FS_LOCKDI").c_str(), v) || v > 255)
@@ -402,6 +433,28 @@ esp_err_t WebCfgServer::processForkSettings(PsychicRequest* request, PsychicResp
         return buildForkSettingsHtml(request, resp, nullptr, "The settings are locked. Nothing was saved.", true);
     }
 
+#ifdef NUKI_HUB_WAVESHARE_8DI8RO
+    if(param(request, "FS_ACTION") == "relaydefaults")
+    {
+        // Same checks as a save (settings lock and TOTP above, validation in
+        // save(): refused if a rule would lose its webhook relay).
+        *next = *stored;
+        resetRelaysToDefaults(*next);
+        char resetErr[200] = "";
+        if(!ForkSettings::save(*next, resetErr, sizeof(resetErr)))
+        {
+            return buildForkSettingsHtml(request, resp, nullptr, "Relays not reset: " + esc(resetErr), true);
+        }
+        rotateCsrfToken();
+        String msg = "Relays reset to the default roles.";
+        if(WaveshareOutputs::ensureAuthLog(*next))
+        {
+            msg += " 'Publish auth data' was switched on for the log roles; it applies after a reboot.";
+        }
+        return buildForkSettingsHtml(request, resp, nullptr, msg, false);
+    }
+#endif
+
     *next = *stored;
     char err[200] = "";
     bool ok = forkSettingsParse(request, *next, err, sizeof(err));
@@ -439,6 +492,14 @@ esp_err_t WebCfgServer::processForkSettings(PsychicRequest* request, PsychicResp
                                      "Not saved: " + esc(err) + ". New secret/token values were not kept; enter them again.", true);
     }
     rotateCsrfToken();
+#ifdef NUKI_HUB_WAVESHARE_8DI8RO
+    if(WaveshareOutputs::ensureAuthLog(*next))
+    {
+        return buildForkSettingsHtml(request, resp, nullptr,
+                                     "Saved and applied. 'Publish auth data' was switched on for the relay log roles; "
+                                     "it applies after a reboot.", false);
+    }
+#endif
     return buildForkSettingsHtml(request, resp, nullptr, "Saved and applied.", false);
 }
 
@@ -526,6 +587,189 @@ void WebCfgServer::buildLockMqttSection(PsychicStreamResponse* response, const S
     printInputField(response, "FS_LM_SILENCE", "Skip only if the lock was heard from within (ms, 10000-900000)", (int)s.lockSilenceMs, 6, "");
     printInputField(response, "FS_LM_GRACE", "Skip grace after a fob action (s, 0-600, 0 = off): never skip this soon after the previous one", (int)s.skipGraceS, 3, "");
     response->print("</table>");
+}
+#endif
+
+#ifdef NUKI_HUB_WAVESHARE_8DI8RO
+void WebCfgServer::buildRelaySection(PsychicStreamResponse* response, const Settings& s, const Settings& stored)
+{
+    using namespace RelayOutputsLogic;
+    const Caps caps = ForkSettings::caps();
+    WaveshareOutputs::Status st;
+    WaveshareOutputs::status(st);
+
+    response->print("<h3>Relays</h3><table>");
+    {
+        String text;
+        if(!stored.relayOutputs)
+        {
+            text = "off: relays only pulse for webhook rules";
+        }
+        else if(!st.running)
+        {
+            text = "<span class=\"warning\">on, not running (see the log)</span>";
+        }
+        else if(!st.armed)
+        {
+            text = "on, all relays open until the first lock state after boot";
+        }
+        else
+        {
+            text = String("on, lock state from ") + st.lockSource;
+            if(st.stale)
+            {
+                text += ", <span class=\"warning\">state stale (Lock fault)</span>";
+            }
+            if(st.bleCommError)
+            {
+                text += ", <span class=\"warning\">last BLE command failed (Lock fault)</span>";
+            }
+            if(st.doorJammed)
+            {
+                text += ", <span class=\"warning\">door sensor jammed (log)</span>";
+            }
+        }
+        printParameter(response, "Relay state outputs", text.c_str());
+    }
+    if(st.running)
+    {
+        String lock = "lock ";
+        if(st.lockState >= 0)
+        {
+            char str[30] = {0};
+            NukiLock::lockstateToString((NukiLock::LockState)st.lockState, str);
+            lock += str;
+        }
+        else
+        {
+            lock += "unknown";
+        }
+        lock += ", door ";
+        if(st.doorState >= 0)
+        {
+            char str[30] = {0};
+            NukiLock::doorSensorStateToString((NukiLock::DoorSensorState)st.doorState, str);
+            lock += str;
+        }
+        else
+        {
+            lock += "unknown";
+        }
+        lock += st.mqttLive ? ", MQTT session live" : ", no MQTT session";
+        lock += st.bleAgeMs >= 0 ? ", last BLE state read " + duration(st.bleAgeMs) + " ago" : String(", no BLE state read yet");
+        printParameter(response, "Inputs", lock.c_str());
+        String keypad = String((unsigned long)st.keypadWrong) + " wrong, " + String((unsigned long)st.keypadValid) +
+                        " valid since boot; last log read " +
+                        (st.lastLogReadAgeMs >= 0 ? duration(st.lastLogReadAgeMs) + " ago" : String("none yet"));
+        printParameter(response, "Keypad events", keypad.c_str());
+        printParameter(response, "Relay task stack unused", (String((unsigned long)st.stackFreeBytes) + " bytes").c_str());
+    }
+    {
+        const int poll = _preferences->getInt(preference_query_interval_lockstate, 1800);
+        String text = String(poll) + " s (Nuki configuration). Each poll wakes the lock: lower = faster BLE-only outputs "
+                      "(night mode, failed actions, all states when the lock isn't connected over MQTT), more battery.";
+        printParameter(response, "Lock state poll interval", text.c_str());
+    }
+    {
+        String keypad = String("Nuki Hub: ") + (_nuki != nullptr && _nuki->hasKeypad() ? "keypad detected" : "no keypad detected") +
+                        "; lock reports a keypad battery state: " + (st.keypadBatteryReported ? "yes" : "no / not read yet") +
+                        ". Detection may miss the newest keypad model; the keypad roles work without it.";
+        printParameter(response, "Keypad", keypad.c_str());
+    }
+    bool logRole = false;
+    for(size_t i = 0; i < caps.relays; i++)
+    {
+        logRole = logRole || usesActivityLog(configuredRole(s, i));
+    }
+    if(s.relayOutputs && logRole)
+    {
+        const bool authLog = _preferences->getBool(preference_publish_authdata, false);
+        const bool pin = _nuki != nullptr && _nuki->isPinValid();
+        if(!authLog || !pin)
+        {
+            String warn = "<span class=\"warning\">Keypad and door-sensor-jam roles need the lock's activity log: ";
+            warn += !pin ? "no valid lock PIN (Nuki configuration)" : "";
+            warn += !pin && !authLog ? "; " : "";
+            warn += !authLog ? "'Publish auth data' is off (saving switches it on; applies after a reboot)" : "";
+            warn += "</span>";
+            printParameter(response, "Activity log", warn.c_str());
+        }
+    }
+    response->print("</table><table>");
+    response->print("<input type=\"hidden\" name=\"FS_RO_SEEN\" value=\"1\">");
+    printCheckBox(response, "FS_RO_EN", "Relay state outputs: relays follow the lock, door sensor and keypad (roles below)", s.relayOutputs, "");
+    std::vector<std::pair<String, String>> counts;
+    for(unsigned i = 1; i <= caps.relays; i++)
+    {
+        counts.push_back(std::make_pair(String(i), String(i)));
+    }
+    printDropDown(response, "FS_RELAYS", "Relays available to rules while relay state outputs are off (relay1..relayN); "
+                  "when on, rules can use the 'Webhook pulse' relays", String((unsigned)s.relayCount), counts, "");
+    response->print("</table>");
+
+    response->print("<table><tr><th>Relay</th><th>Role (when relay state outputs are on)</th><th>Invert</th>"
+                    "<th>Pulse ms (100-30000)</th><th>Now</th></tr>");
+    for(unsigned i = 0; i < caps.relays && i < MAX_RELAYS; i++)
+    {
+        const RelayRole role = configuredRole(s, i);
+        const uint8_t bit = (uint8_t)(1u << i);
+        response->print("<tr><td>");
+        response->print(i + 1);
+        response->print("</td><td><select name=\"FS_RR");
+        response->print(i);
+        response->print("\">");
+        for(uint8_t r = 0; r < ROLE_COUNT; r++)
+        {
+            response->print("<option value=\"");
+            response->print(r);
+            response->print(r == (uint8_t)role ? "\" selected>" : "\">");
+            response->print(roleName((RelayRole)r));
+            if(r == (uint8_t)DEFAULTS[i].role)
+            {
+                response->print(" (default)");
+            }
+            response->print("</option>");
+        }
+        response->print("</select>");
+        if(isKeypadRole(role) && (_nuki == nullptr || !_nuki->hasKeypad()))
+        {
+            response->print(" <small>Nuki Hub reports no keypad (may miss the newest model)</small>");
+        }
+        response->print("</td><td><input type=hidden name=\"FS_RI");
+        response->print(i);
+        response->print("\" value=\"0\"><input type=checkbox name=\"FS_RI");
+        response->print(i);
+        response->print(configuredInvert(s, i) ? "\" value=\"1\" checked>" : "\" value=\"1\">");
+        response->print("</td><td><input type=\"number\" name=\"FS_RP");
+        response->print(i);
+        response->print("\" min=\"100\" max=\"30000\" value=\"");
+        response->print((unsigned long)s.relays[i].pulseMs);
+        response->print("\"></td><td>");
+        if(!st.relaysReady)
+        {
+            response->print("?");
+        }
+        else
+        {
+            response->print((st.closed & bit) ? "closed" : "open");
+            if(st.pulsing & bit)
+            {
+                response->print(" (pulsing)");
+            }
+        }
+        if(!stored.relayOutputs)
+        {
+            response->print(", webhook relay");
+        }
+        response->print("</td></tr>");
+    }
+    response->print("</table>");
+    response->print("<p>Closed = COM-NO closed; <b>Invert</b> flips it (the default fault roles are inverted: closed = OK, "
+                    "so a reboot, power loss or cut wire reads as a fault). Relays stay open until the first lock state after "
+                    "boot. Webhook relays and keypad roles pulse for their Pulse ms. Lock and door changes switch within a "
+                    "second while the lock is connected over MQTT, otherwise at the next lock state poll. Wrong keypad codes "
+                    "change no lock state: they are only seen in the lock's activity log, read after the next lock state "
+                    "change or poll. Valid keypad entries come over MQTT at once. Relay contacts are dry contacts only.</p>");
 }
 #endif
 
@@ -685,18 +929,12 @@ esp_err_t WebCfgServer::buildForkSettingsHtml(PsychicRequest* request, PsychicRe
     printInputField(&response, "FS_BLESTALL", "Reboot if the BLE task stalls for (5000-600000)", (int)s.bleStallMs, 6, "");
     response.print("</table>");
 
+#ifdef NUKI_HUB_WAVESHARE_8DI8RO
     if(caps.relays > 0)
     {
-        response.print("<h3>Relays</h3><table>");
-        std::vector<std::pair<String, String>> counts;
-        for(unsigned i = 1; i <= caps.relays; i++)
-        {
-            counts.push_back(std::make_pair(String(i), String(i)));
-        }
-        printDropDown(&response, "FS_RELAYS", "Relays available to rules (relay1..relayN)", String((unsigned)s.relayCount), counts, "");
-        printInputField(&response, "FS_PULSE", "Relay pulse (100-30000)", (int)s.relayPulseMs, 5, "");
-        response.print("</table>");
+        buildRelaySection(&response, s, *stored);
     }
+#endif
 
 #ifdef NUKI_HUB_EMBEDDED_LOCK_MQTT
     buildLockMqttSection(&response, s, *stored);
@@ -735,9 +973,12 @@ esp_err_t WebCfgServer::buildForkSettingsHtml(PsychicRequest* request, PsychicRe
     {
         actions.push_back(std::make_pair(String(a), String("Lock: ") + a));
     }
-    for(unsigned i = 1; i <= caps.relays && i <= s.relayCount; i++)
+    for(unsigned i = 1; i <= caps.relays; i++)
     {
-        actions.push_back(std::make_pair("relay" + String(i), "Relay " + String(i) + " pulse"));
+        if(relayAvailableToRules(s, (int)i, caps.relays))
+        {
+            actions.push_back(std::make_pair("relay" + String(i), "Relay " + String(i) + " pulse"));
+        }
     }
     response.print("<h3>Rules</h3><p>One Protect alarm per fob button + gesture, each with its own token. "
                    "Empty key/field/value = not checked. Disabled rules are drafts and not checked.</p>");
@@ -800,7 +1041,9 @@ esp_err_t WebCfgServer::buildForkSettingsHtml(PsychicRequest* request, PsychicRe
         printInputField(&response, name, "Value 2 (e.g. longPress, press, doublePress)", esc(r.value2).c_str(), LEN_TEXT, "");
         snprintf(name, sizeof(name), "R%u_ACT", n);
         std::vector<std::pair<String, String>> ruleActions = actions;
-        if(isSet(r.action) && canonicalAction(r.action, s.relayCount) == nullptr)
+        const int ruleRelay = relayOfAction(r.action);
+        if(isSet(r.action) && (ruleRelay > 0 ? !relayAvailableToRules(s, ruleRelay, caps.relays)
+                                             : canonicalAction(r.action, 0) == nullptr))
         {
             ruleActions.push_back(std::make_pair(esc(r.action), esc(r.action) + " (not available)"));
         }
@@ -833,6 +1076,24 @@ esp_err_t WebCfgServer::buildForkSettingsHtml(PsychicRequest* request, PsychicRe
         response.print("</table>");
     }
     response.print("<input type=\"submit\" value=\"Switch the webhook off now\" style=\"background: red\"></form>");
+#ifdef NUKI_HUB_WAVESHARE_8DI8RO
+    if(caps.relays > 0 && editable)
+    {
+        response.print("<br><form method=\"post\" action=\"/post?page=forkcfg\" accept-charset=\"utf-8\" "
+                       "onsubmit=\"return confirm('Reset every relay to its default role, invert and pulse? Your relay choices are lost.');\">");
+        response.print("<input type=\"hidden\" name=\"FORKCFG\" value=\"1\"><input type=\"hidden\" name=\"FS_ACTION\" value=\"relaydefaults\">");
+        response.print("<input type=\"hidden\" name=\"FSCSRF\" value=\"");
+        response.print(csrf());
+        response.print("\">");
+        if(totpAvailable && (stored->requireTotp || mfaApproval))
+        {
+            response.print("<table>");
+            printInputField(&response, "totpkey", "TOTP code", "", 6, "autocomplete=\"one-time-code\" inputmode=\"numeric\"");
+            response.print("</table>");
+        }
+        response.print("<input type=\"submit\" value=\"Reset relays to defaults\"></form>");
+    }
+#endif
     response.print("</body></html>");
     return response.endSend();
 }

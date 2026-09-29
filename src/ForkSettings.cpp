@@ -8,6 +8,7 @@
 #include <memory>
 #ifdef NUKI_HUB_WAVESHARE_8DI8RO
 #include "WaveshareBoard.h"
+#include "WaveshareOutputs.h"
 #endif
 
 using namespace ForkSettingsLogic;
@@ -212,6 +213,9 @@ namespace
         computeState(current, currentState);
         settingsGeneration = settingsGeneration + 1;
         ProtectWebhook::onRulesChanged(changed, MAX_RULES);
+#ifdef NUKI_HUB_WAVESHARE_8DI8RO
+        WaveshareOutputs::onSettingsApplied(current.relayOutputs);
+#endif
     }
 
 #ifdef FORK_SETTINGS_HAVE_HEADER
@@ -230,6 +234,10 @@ namespace
         s.bleStallMs = PROTECT_WEBHOOK_BLE_STALL_MS;
         s.relayPulseMs = PROTECT_WEBHOOK_RELAY_PULSE_MS;
         s.relayCount = ForkSettings::caps().relays;
+        for(ForkSettingsLogic::RelaySetting& relay : s.relays)
+        {
+            relay.pulseMs = PROTECT_WEBHOOK_RELAY_PULSE_MS;
+        }
 #ifdef PROTECT_WEBHOOK_ALLOW_BROAD_RULES
         s.allowBroadRules = true;
 #endif
@@ -348,6 +356,10 @@ void ForkSettings::begin()
     {
         Log->printf("Protect webhook disabled: %s\n", reason);
     }
+#ifdef NUKI_HUB_WAVESHARE_8DI8RO
+    // Relay state outputs: log baseline, auth-log preference, worker (if on).
+    WaveshareOutputs::begin(*s);
+#endif
 }
 
 bool ForkSettings::snapshot(Settings& out, TickType_t wait)

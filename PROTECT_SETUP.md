@@ -65,7 +65,10 @@ can open the door, and it shows a big red warning while the web UI has no passwo
   `sensor_button_pressed`, device `<fob MAC>`, field `button` = `right`,
   field 2 `value` = `longPress`, action `unlock`. One fob per person, so the fob
   is the identity. Actions: the Nuki lock actions, or `relay1`..`relayN` (N =
-  "Relays available to rules"). The *Name* is only a label and may use any
+  "Relays available to rules"; with **Relay state outputs** on, only the relays
+  whose role is *Webhook pulse*, see `WAVESHARE.md` "Relay state outputs"). A
+  relay rule pulses for that relay's **Pulse ms** (Relays table; the old single
+  "Relay pulse" value was copied to every relay). The *Name* is only a label and may use any
   text (stored as UTF-8, at most 32 bytes: `é` takes 2, `→` 3).
 - **Webhook enabled**: the master switch. The status box at the top says whether
   the webhook is active and, if not, why (no secret, invalid rule, switched off),
@@ -77,11 +80,13 @@ rule lacks a device (12 hex digits) or action, `value` lacks `field`, `value2`
 lacks `field2`, key/field/value/field 2/value 2 contain anything but
 `A-Z a-z 0-9 _ . -` (they must be exactly what Protect sends, like
 `sensor_button_pressed`; labels go in *Name*), or a rule would match any event from a fob (neither token nor
-key + value; see *Allow broad rules*). Disabled rules are drafts and not checked.
+key + value; see *Allow broad rules*), or (relay state outputs on) a rule
+uses a relay that isn't a *Webhook pulse* relay, including a role change that
+would leave an enabled rule on such a relay. Disabled rules are drafts and not checked.
 The character check only runs on save: rules stored before it existed keep
 working, and the next save asks you to fix them.
 Timings: clock skew 1–120 s (default 15 s), cooldown 1–600 s (10 s), action
-deadline 1–60 s (8 s), BLE stall 5–600 s (30 s), relay pulse 100–30000 ms (3 s).
+deadline 1–60 s (8 s), BLE stall 5–600 s (30 s), relay pulse per relay 100–30000 ms (3 s).
 
 **Hardening options** (all off by default):
 | Option | What it does |
@@ -100,6 +105,7 @@ sensitive operations** also covers this page (with Duo, approve, then save again
 **Not in export/import:** the settings live in their own NVS namespace
 (`forkcfg`), so Nuki Hub's configuration export never contains the secret or
 tokens, and an import doesn't change them. Nuki Hub's factory reset erases them.
+The same holds for the relay roles (they are in the same blob, on purpose).
 
 **Optional compile-time seed:** `src/ProtectWebhookConfig.h` (copy of
 `src/ProtectWebhookConfig.h.example`) is no longer needed. If it exists, its
@@ -194,7 +200,8 @@ One alarm per rule (e.g. "Fob A - Hold Right", "Fob A - Press Right"):
 `pio test -e native` runs the rule matching, timestamp, replay and per-rule
 cooldown logic (`src/ProtectWebhookLogic.h`) with the same cases as the bench
 suite below, and the settings validation, storage format and form helpers
-(`src/ForkSettingsLogic.h`), on your computer. CI runs it on every push.
+(`src/ForkSettingsLogic.h`), and the relay state output roles
+(`src/RelayOutputsLogic.h`), on your computer. CI runs it on every push.
 
 ### 5. Bench test without moving the lock
 1. In **Nuki Lock Access Control**, untick the action the rule uses (and the
@@ -264,7 +271,7 @@ would have to hold a Protect API key. The webhook keeps credentials off the lock
 ### Response codes
 | Code | Result | Meaning |
 |---|---|---|
-| 200 | `ack` | Queued for the lock task, or published to the lock over MQTT; for a `relayN` rule: relay closed, it opens after the relay pulse time |
+| 200 | `ack` | Queued for the lock task, or published to the lock over MQTT; for a `relayN` rule: relay closed, it opens after that relay's pulse time |
 | 200 | `skipped_locked` / `skipped_unlocked` | `lock`/`unlock` not sent: the lock's live MQTT session says it already is locked/unlocked (section 2b) |
 | 400 | `bad_json` / `no_triggers` | Body not a Protect alarm |
 | 403 | `disabled` | Webhook switched off or its settings invalid (the web page says why) |
@@ -273,7 +280,7 @@ would have to hold a Protect API key. The webhook keeps credentials off the lock
 | 403 | `acl_denied` | Matched, but the action is disabled in Nuki Hub's ACL |
 | 413 | `bad_size` | Empty or > 4 KB body |
 | 429 | `cooldown` | Replayed event, or within the cooldown (default 10 s) since the last accepted event for the same rule. Editing a rule resets its cooldown. |
-| 500 | `error` | Lock action couldn't be queued, or the relay's I2C write failed (a retry then gets `429`) |
+| 500 | `error` | Lock action couldn't be queued, or the relay's I2C write failed (a retry then gets `429`), or the rule's relay isn't a *Webhook pulse* relay (not reachable: saving refuses it) |
 | 503 | `no_time` | Clock not synced yet (Protect retries twice) |
 | 503 | `busy` | Another lock action is still queued or being sent (or sent over MQTT and not confirmed yet, max. 2 s), or settings are being saved (Protect retries twice) |
 | 503 | `ble_stalled` | The BLE (nuki) task hasn't run for the BLE stall time (default 30 s); the board reboots right after replying (also sent briefly after boot, before BLE starts) |

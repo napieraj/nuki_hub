@@ -46,6 +46,7 @@ static esp_hosted_coprocessor_fwver_t host_version_struct = {
 #include "ProtectWebhook.h"
 #include "ForkSettings.h"
 #include "WaveshareBoard.h"
+#include "WaveshareOutputs.h"
 #include <freertos/queue.h>
 
 typedef struct
@@ -6176,6 +6177,7 @@ esp_err_t WebCfgServer::buildInfoHtml(PsychicRequest *request, PsychicResponse* 
     response.print(getEspRestartReason());
 #ifdef NUKI_HUB_WAVESHARE_8DI8RO
     WaveshareBoard::printBleEvents(response);
+    WaveshareOutputs::printInfo(response);
 #endif
     response.print("\nFree internal heap: ");
     response.print(ESP.getFreeHeap());

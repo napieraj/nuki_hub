@@ -17,6 +17,9 @@
 #ifdef NUKI_HUB_EMBEDDED_LOCK_MQTT
 #include "LockMqttServer.h"
 #endif
+#ifdef NUKI_HUB_WAVESHARE_8DI8RO
+#include "WaveshareOutputs.h"
+#endif
 static_assert(Nuki::CmdResult::NotPaired == ProtectWebhookLogic::CMD_RESULT_NOT_PAIRED, "CmdResult values changed");
 static_assert((uint8_t)NukiLock::LockAction::Unlatch == 0x03 && (uint8_t)NukiLock::LockAction::LockNgoUnlatch == 0x05 &&
               (uint8_t)NukiLock::LockAction::FobAction1 == 0x81 && (uint8_t)NukiLock::LockAction::FobAction3 == 0x83 &&
@@ -735,6 +738,9 @@ bool NukiWrapper::updateKeyTurnerState()
     _network->publishKeyTurnerState(_keyTurnerState, _lastKeyTurnerState);
     _gpio->setPinOutput(_pinsHighWhenDoorOpen, _keyTurnerState.doorSensorState == NukiLock::DoorSensorState::DoorOpened ? HIGH : LOW);
     _gpio->setPinOutput(_pinsHighWhenDoorClosed, _keyTurnerState.doorSensorState == NukiLock::DoorSensorState::DoorClosed ? HIGH : LOW);
+#ifdef NUKI_HUB_WAVESHARE_8DI8RO
+    WaveshareOutputs::onKeyTurnerState(_keyTurnerState);
+#endif
 
     char lockStateStr[20];
     lockstateToString(lockState, lockStateStr);
@@ -1067,6 +1073,11 @@ void NukiWrapper::updateAuthData(bool retrieved)
 
         Log->print("Log size: ");
         Log->println(log.size());
+#ifdef NUKI_HUB_WAVESHARE_8DI8RO
+        // The complete read (5 s after the request), not the early one above,
+        // which can miss entries still arriving.
+        WaveshareOutputs::onLogEntries(log);
+#endif
 
         if(log.size() > 0)
         {

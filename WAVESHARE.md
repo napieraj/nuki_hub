@@ -51,7 +51,7 @@ fallback. See "Nuki lock MQTT" below.
   every 12 h); after a power cut `PCF85063 RTC time: <date> UTC` and `Time restored
   from the PCF85063 RTC`, or a line saying why not (e.g. `lost its time`).
 - **Relay rules:** a webhook rule with action `relay1`..`relay8` closes that relay
-  for the relay pulse time (web page, default 3 s), e.g. wired across an
+  for that relay's pulse time (web page, "Pulse ms" per relay, default 3 s), e.g. wired across an
   intercom's door-open button: relay **COM + NO** in parallel with the button's
   two contacts. That only works if the button is a plain dry contact; 2-wire bus
   intercoms need their own interface. Relay rules skip the lock checks (BLE,
@@ -60,7 +60,9 @@ fallback. See "Nuki lock MQTT" below.
   that no relay clicks during a few PoE power cycles and reflashes (the power-up
   state of the TCA9554 driver is not yet proven, see `FINDINGS.md`).
   The pulse must be 100..30000 ms. "Relays available to rules" (1-8, web page)
-  limits which `relayN` a rule may use; higher ones are refused when saving. If opening the relay fails, the
+  limits which `relayN` a rule may use; higher ones are refused when saving.
+  With "Relay state outputs" on (below), only relays with the role *Webhook
+  pulse* are available to rules instead. If opening the relay fails, the
   board retries every 100 ms until it succeeds (`relayN: opening failed` in the log).
   The TCA9554 has no reset line: if the ESP resets mid-pulse (crash, watchdog,
   BLE reboot), the relay stays closed until the next boot clears it (boot time,
@@ -89,6 +91,7 @@ fallback. See "Nuki lock MQTT" below.
   | BT controller, NimBLE host     | lwIP tcpip task (`sdkconfig.defaults.waveshare-8di8ro`) |
   | `nuki` task (BLE to the lock)  | `ntw` task, httpd incl. `/protect` webhook |
   |                                | `lockmqtt` task (built-in MQTT server, 5 KiB stack, prio 3) |
+  |                                | `relayout` task (relay state outputs, 4 KiB, prio 2; only once switched on) |
 
   A webhook handler only queues the action; the nuki task on core 0 performs
   it over BLE. With the lock's MQTT session up, the webhook handler instead
@@ -207,3 +210,80 @@ The key to the lock lives on this network-facing board: keep it on its own
 VLAN, allow only the Protect console to reach port 80 (and the lock port 1883,
 if it uses the built-in MQTT server), and turn on Duo/TOTP
 for the web UI.
+
+### Relay state outputs
+Optional, off by default (web page **Protect Webhook & Relays → Relays**, tick
+**Relay state outputs**). The eight relays then follow the lock, the door
+sensor and the keypad, one role per relay, e.g. as dry contacts into an alarm
+panel's zones. **Relay contacts are dry contacts only**: no mains, no bus
+intercoms. Setup steps: `SETUP.md` 9c.
+
+"Closed" = relay energized, COM-NO closed. **Invert** flips it.
+
+| Role | Kind | Closed when |
+|---|---|---|
+| Off | – | never |
+| Webhook pulse | pulse | a webhook rule `relayN` fires (the only role rules can use) |
+| Secure | steady | locked **and** door closed (both known) |
+| Door open | steady | door opened |
+| Locked | steady | locked (not while locking) |
+| Lock fault | steady | motor blocked; the last lock action failed mechanically (motor blocked, low motor voltage, clutch, motor power, incomplete, failure; stays until the next action); the last BLE command failed after all retries; or the state is stale |
+| Battery low | steady | lock, keypad or door sensor battery critical |
+| Door sensor fault | steady | door sensor state unknown, uncalibrated or tampered, or the activity log says "jammed" (until the door is next reported opened/closed); never while calibrating |
+| Keypad wrong code | pulse | keypad log entry "invalid code" / "not authorized" |
+| Keypad valid entry | pulse | valid keypad code or fingerprint (MQTT `lockActionEvent` with a Code-ID, else the activity log; counted once) |
+| Unlocked | steady | unlocked, unlocked (lock 'n' go) or unlatched |
+| Night mode | steady | night mode active |
+
+**Defaults** (only for relays without a stored role; *Reset relays to
+defaults* restores them): 1 Webhook pulse, 2 Secure, 3 Door open, 4 Locked,
+5 Lock fault **inverted**, 6 Battery low **inverted**, 7 Door sensor fault
+**inverted**, 8 Keypad wrong code. The fault roles are inverted so that closed
+means OK: a reboot, a power cut or a cut wire reads as a fault (supervised, like
+a tamper loop). Relays with a role other than Webhook pulse can't be used by
+rules; saving refuses a rule or a role change that would do that, and the
+webhook refuses such a press (`500 error`).
+
+**Fail-safe:** all relays stay open after boot until the first lock state
+(MQTT or BLE), inverted ones too, then take their roles. **Every BLE error
+and every beacon loss reboots the board** (upstream behaviour; "BLE EVENTS" on
+the info page), so the relays drop for the boot time plus the first state each
+time. The TCA9554 has no reset line: after a crash mid-pulse a relay stays as
+it was until `setup()` opens it.
+
+**Sources:** while the lock's MQTT session (built-in server) is live, its
+`state`, `doorsensorState`, battery topics and `lockActionEvent` are used as
+they arrive; the BLE key turner state fills in the rest (failed-action status,
+night mode) and is the only source without MQTT. For each value the newer of
+the two wins. **Stale** (Lock fault): neither a live MQTT session that was heard
+from within "Skip only if the lock was heard from within" (default 330 s) nor a
+successful BLE state read within 2 × the lock state poll interval + 60 s
+(default 3660 s). Wrong keypad codes don't change the lock state and aren't
+published over MQTT; they are only in the lock's activity log, read over BLE
+after a BLE state read that finds the lock locked or unlocked (needs a valid
+PIN and "Publish auth data"; only the newest "authlog max entries" per read).
+
+| Role | With the lock on MQTT | Without |
+|---|---|---|
+| Secure, Door open, Locked, Unlocked, Battery low, Door sensor fault (state) | < 1 s | next lock state poll (default 30 min) |
+| Lock fault: failed action, Night mode | ~1-3 s after the next state change (hybrid mode reads BLE then) | next poll |
+| Lock fault: stale, BLE command failed | ≤ 1 s after the condition | same |
+| Keypad valid entry | < 1 s | next activity-log read |
+| Keypad wrong code, Door sensor jammed | next activity-log read (after the next lock state change or poll, + 5 s) | same |
+
+The newest Nuki Keypad (NFC, Apple Home Key) may not be detected by Nuki Hub
+("Has keypad: No"); the keypad roles don't depend on it. Keypad log entries
+count whatever their source byte (code, fingerprint, and presumably NFC);
+Apple Home Key entries are not keypad entries. Not verified on hardware yet.
+
+Log lines: `Relay outputs: started`, `Relay outputs: first lock state known,
+relays follow their roles`, `Relay outputs: relay5 (Lock fault, inverted)
+closed`, `Relay outputs: relay8 (Keypad wrong code (pulse)) pulsed`. The info
+page lists each relay's role and state; the settings page also shows the
+inputs, the poll interval and keypad event counts.
+
+Settings are in the `forkcfg` blob (format v4) like the rest of the page, not
+in Nuki Hub's export/import. A board with settings from the previous firmware
+(v3) starts with relay state outputs off and every relay's pulse set to the old
+"Relay pulse". Flashing an older firmware back makes it refuse the v4 settings
+(webhook off until saved again on its page).
