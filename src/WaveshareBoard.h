@@ -8,7 +8,8 @@
 //    the web UI or a bootloop reset stored. Wi-Fi is never started: no station,
 //    no fallback, no "NukiHub" access point. If Ethernet fails, the ESP reboots.
 //  - The eight relays (TCA9554 on I2C) are forced off before anything else runs,
-//    and a webhook rule can pulse one (action "relay1".."relay8");
+//    and a webhook rule can pulse one (action "relay1".."relay8"); optionally
+//    they follow lock/door/keypad state (WaveshareOutputs.h);
 //    and the W5500 gets a full hardware reset pulse (its RSTn is on GPIO39).
 //  - BLE TX power defaults to +9 dBm when unset (upstream would silently use +3).
 //  - The WS2812 flashes green/red after each authenticated webhook call.
@@ -98,11 +99,23 @@ namespace WaveshareBoard
     };
     void recordBleEvent(uint8_t reason);
 
-    // Close relay 1-8 (TCA9554 output 0-7) for pulseMs, then open it again.
-    // Non-blocking (an esp_timer opens it); a new pulse on the same relay
-    // restarts the time. Call from one task only (the httpd task). Returns
-    // false if the relay number is invalid or the I2C write failed.
-    bool pulseRelay(int relay, uint32_t pulseMs);
+    // Close relay 1-8 (TCA9554 output 0-7) for pulseMs, then open it again
+    // (inverted: open it for pulseMs, then close it). Non-blocking (an
+    // esp_timer restores it; all eight timers exist from earlyInit(), so any
+    // task may call this); a new pulse on the same relay restarts the time.
+    // Returns false if the relay number is invalid or the I2C write failed.
+    bool pulseRelay(int relay, uint32_t pulseMs, bool inverted = false);
+
+    // Steady outputs (relay state outputs): the relays in mask (bit N-1 =
+    // relay N) take the level in values, in one I2C write, and only if the
+    // shadow register differs. Relays in a pulse are skipped (values becomes
+    // their level after the pulse). Waits at most 50 ms for another writer.
+    bool setRelayStates(uint8_t mask, uint8_t values);
+    bool setRelayState(int relay, bool on);
+
+    // Shadow of the output register and the relays in a pulse. False if the
+    // TCA9554 isn't initialized (then all relays are open or unknown).
+    bool relayStates(uint8_t& closed, uint8_t& pulsing);
 
     // Short flash on the WS2812 (GPIO 38) after an authenticated webhook:
     // green = action queued, red = no rule matched or refused. Non-blocking.
