@@ -196,7 +196,54 @@ namespace RelayOutputsLogic
         bool stale;
         bool bleCommError;
         bool doorJammed;
+        // Last definite lock position (locked / unlocked / unlatched /
+        // unlocked lock 'n' go), held while the lock reports a transient or
+        // fault state (locking, unlocking, unlatching, motor blocked, ...).
+        bool havePosition;
+        uint8_t position;
     };
+
+    // States that say where the bolt is. Everything else (locking, unlocking,
+    // unlatching, uncalibrated, motor blocked, undefined) doesn't.
+    inline bool isDefiniteLockState(uint8_t s)
+    {
+        return s == LOCK_LOCKED || s == LOCK_UNLOCKED || s == LOCK_UNLATCHED || s == LOCK_UNLOCKED_LNGA;
+    }
+
+    // Keeps the last definite lock state across transient and fault states,
+    // so a jam against an already locked bolt doesn't read as "not locked".
+    // Lock fault still reports the jam from the live state.
+    struct PositionHold
+    {
+        bool have;
+        uint8_t state;
+
+        void update(bool haveLock, uint8_t lockState)
+        {
+            if(haveLock && isDefiniteLockState(lockState))
+            {
+                have = true;
+                state = lockState;
+            }
+        }
+    };
+
+    // The lock position the Locked / Unlocked / Secure roles use: the live
+    // state if it is definite, else the held one; false if neither is known.
+    inline bool lockPosition(const Inputs& in, uint8_t& out)
+    {
+        if(in.haveLock && isDefiniteLockState(in.lockState))
+        {
+            out = in.lockState;
+            return true;
+        }
+        if(in.havePosition)
+        {
+            out = in.position;
+            return true;
+        }
+        return false;
+    }
 
     // The newer of the two: MQTT only while its session is live, BLE fills
     // in whatever MQTT hasn't sent. Ties go to MQTT.
@@ -252,7 +299,9 @@ namespace RelayOutputsLogic
     // Closed-when of a steady role, before Invert. Pulse roles rest open.
     inline bool steadyClosed(RelayRole r, const Inputs& in)
     {
-        const bool locked = in.haveLock && in.lockState == LOCK_LOCKED;
+        uint8_t pos = 0;
+        const bool havePos = lockPosition(in, pos);
+        const bool locked = havePos && pos == LOCK_LOCKED;
         switch(r)
         {
         case RelayRole::Secure:
@@ -262,8 +311,7 @@ namespace RelayOutputsLogic
         case RelayRole::Locked:
             return locked;
         case RelayRole::Unlocked:
-            return in.haveLock && (in.lockState == LOCK_UNLOCKED || in.lockState == LOCK_UNLOCKED_LNGA ||
-                                   in.lockState == LOCK_UNLATCHED);
+            return havePos && (pos == LOCK_UNLOCKED || pos == LOCK_UNLOCKED_LNGA || pos == LOCK_UNLATCHED);
         case RelayRole::LockFault:
             return (in.haveLock && in.lockState == LOCK_MOTOR_BLOCKED) ||
                    (in.haveCompletion && completionIsFault(in.completionStatus)) || in.bleCommError || in.stale;

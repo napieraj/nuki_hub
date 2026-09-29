@@ -83,7 +83,7 @@ global "Relay pulse" (`relayPulseMs`) used by every `relayN` rule.
 | 1 | `WebhookPulse` | P | a Protect webhook rule with action `relayN` fires (today's behaviour) |
 | 2 | `Secure` | S | lock state `Locked` **and** door `DoorClosed` |
 | 3 | `DoorOpen` | S | door `DoorOpened` |
-| 4 | `Locked` | S | lock state `Locked` (not `Locking`; upstream's GPIO role counts `Locking` too, relays shouldn't click on a transient) |
+| 4 | `Locked` | S | last definite lock position is `Locked` (held through `Locking`, `Unlocking`, `MotorBlocked`, …; see WAVESHARE.md) |
 | 5 | `LockFault` | S | any of: lock state `MotorBlocked`; `lastLockActionCompletionStatus` in {MotorBlocked, LowMotorVoltage, ClutchFailure, MotorPowerFailure, IncompleteFailure, Failure}; BLE comm error; **state stale** (both below) |
 | 6 | `BatteryLow` | S | lock, keypad or door sensor battery critical |
 | 7 | `DoorSensorFault` | S | door state in {DoorStateUnknown, Uncalibrated, Tampered}, or the last door-sensor log entry is `SensorJammed` (latched until the next door open/close). Not while `Calibrating`. |

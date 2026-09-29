@@ -35,6 +35,7 @@ namespace
     BleInputs ble = {};
     bool bleCommError = false;
     JamLatch jam = {};
+    PositionHold position = {}; // last definite lock state (option 2)
     KeypadDedupe dedupe = {};
     LogTracker logTracker = {};
     uint8_t pendingWrong = 0;   // keypad events waiting for the worker
@@ -199,6 +200,9 @@ namespace
                                bleFreshMs(pollIntervalS));
             in.bleCommError = bleCommError;
             in.doorJammed = jam.latched;
+            position.update(in.haveLock, in.lockState);
+            in.havePosition = position.have;
+            in.position = position.state;
             wasArmed = armed;
             armed = armed || in.haveLock;
             lastInputs = in;

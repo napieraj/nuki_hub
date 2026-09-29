@@ -468,6 +468,57 @@ void test_keypad_dedupe()
     TEST_ASSERT_TRUE(d.consumeLog(6, 20000));
 }
 
+// Option 2: Locked / Secure / Unlocked keep the last definite lock state while
+// the lock reports a transient or fault state; Lock fault still sees the jam.
+void test_position_hold_across_jam()
+{
+    PositionHold hold = {};
+    Inputs in = known(LOCK_LOCKED, DOOR_CLOSED);
+    hold.update(in.haveLock, in.lockState);
+    in.havePosition = hold.have;
+    in.position = hold.state;
+    TEST_ASSERT_TRUE(steadyClosed(RelayRole::Locked, in));
+
+    // Lock on an already locked bolt: locking, then motor blocked.
+    const uint8_t transient[] = { 0x04 /* locking */, LOCK_MOTOR_BLOCKED, 0xFF /* undefined */ };
+    for(uint8_t st : transient)
+    {
+        in.lockState = st;
+        hold.update(in.haveLock, in.lockState);
+        in.havePosition = hold.have;
+        in.position = hold.state;
+        TEST_ASSERT_TRUE(steadyClosed(RelayRole::Locked, in));
+        TEST_ASSERT_TRUE(steadyClosed(RelayRole::Secure, in));
+        TEST_ASSERT_FALSE(steadyClosed(RelayRole::Unlocked, in));
+    }
+    TEST_ASSERT_TRUE(steadyClosed(RelayRole::LockFault, [&] { Inputs j = in; j.lockState = LOCK_MOTOR_BLOCKED; return j; }()));
+
+    // A jam halfway through locking from unlocked never claims locked.
+    PositionHold h2 = {};
+    Inputs u = known(LOCK_UNLOCKED, DOOR_CLOSED);
+    h2.update(u.haveLock, u.lockState);
+    u.lockState = LOCK_MOTOR_BLOCKED;
+    h2.update(u.haveLock, u.lockState);
+    u.havePosition = h2.have;
+    u.position = h2.state;
+    TEST_ASSERT_FALSE(steadyClosed(RelayRole::Locked, u));
+    TEST_ASSERT_FALSE(steadyClosed(RelayRole::Secure, u));
+    TEST_ASSERT_TRUE(steadyClosed(RelayRole::Unlocked, u));
+
+    // Nothing definite seen yet: no position, nothing closed.
+    Inputs none = known(LOCK_MOTOR_BLOCKED, DOOR_CLOSED);
+    TEST_ASSERT_FALSE(steadyClosed(RelayRole::Locked, none));
+    TEST_ASSERT_FALSE(steadyClosed(RelayRole::Unlocked, none));
+
+    // A new definite state replaces the held one.
+    in.lockState = LOCK_UNLOCKED;
+    hold.update(in.haveLock, in.lockState);
+    in.havePosition = hold.have;
+    in.position = hold.state;
+    TEST_ASSERT_FALSE(steadyClosed(RelayRole::Locked, in));
+    TEST_ASSERT_TRUE(steadyClosed(RelayRole::Unlocked, in));
+}
+
 void test_role_classes()
 {
     TEST_ASSERT_TRUE(isPulseRole(RelayRole::WebhookPulse));
@@ -499,5 +550,6 @@ int main(int, char**)
     RUN_TEST(test_log_classify_sources);
     RUN_TEST(test_keypad_dedupe);
     RUN_TEST(test_role_classes);
+    RUN_TEST(test_position_hold_across_jam);
     return UNITY_END();
 }

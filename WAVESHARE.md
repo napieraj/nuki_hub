@@ -226,7 +226,7 @@ intercoms. Setup steps: `SETUP.md` 9c.
 | Webhook pulse | pulse | a webhook rule `relayN` fires (the only role rules can use) |
 | Secure | steady | locked **and** door closed (both known) |
 | Door open | steady | door opened |
-| Locked | steady | locked (not while locking) |
+| Locked | steady | locked (held, see below) |
 | Lock fault | steady | motor blocked; the last lock action failed mechanically (motor blocked, low motor voltage, clutch, motor power, incomplete, failure; stays until the next action); the last BLE command failed after all retries; or the state is stale |
 | Battery low | steady | lock, keypad or door sensor battery critical |
 | Door sensor fault | steady | door sensor state unknown, uncalibrated or tampered, or the activity log says "jammed" (until the door is next reported opened/closed); never while calibrating |
@@ -234,6 +234,13 @@ intercoms. Setup steps: `SETUP.md` 9c.
 | Keypad valid entry | pulse | valid keypad code or fingerprint (MQTT `lockActionEvent` with a Code-ID, else the activity log; counted once) |
 | Unlocked | steady | unlocked, unlocked (lock 'n' go) or unlatched |
 | Night mode | steady | night mode active |
+
+Locked, Unlocked and Secure use the **last definite lock position**: while the
+lock reports a transient or fault state (locking, unlocking, unlatching, motor
+blocked, undefined) they keep what the lock last reported as locked / unlocked /
+unlatched. A jam against an already locked bolt therefore stays "locked"; Lock
+fault reports the jam. A jam halfway from unlocked never claims locked. Before the
+first definite state after boot they stay open.
 
 **Defaults** (only for relays without a stored role; *Reset relays to
 defaults* restores them): 1 Webhook pulse, 2 Secure, 3 Door open, 4 Locked,
