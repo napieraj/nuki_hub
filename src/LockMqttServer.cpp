@@ -26,6 +26,7 @@
 
 #ifdef NUKI_HUB_WAVESHARE_8DI8RO
 #include "WaveshareBoard.h"
+#include "WaveshareOutputs.h"
 #endif
 
 // QoS for lockAction. Nuki: "For all messages QOS = 2 is used by the device
@@ -151,6 +152,10 @@ namespace
         haveState = false;
         haveDoor = false;
         lastActionReceived = false;
+#ifdef NUKI_HUB_WAVESHARE_8DI8RO
+        // Session started or ended: the relay outputs drop what it said.
+        WaveshareOutputs::onLockMqttSession(active >= 0);
+#endif
     }
 
     void closeConn(int i, const char* why)
@@ -292,6 +297,10 @@ namespace
         {
             ProtectTiming::onMqttCommandResponse(atoi(value));
         }
+#ifdef NUKI_HUB_WAVESHARE_8DI8RO
+        // Relay state outputs: copies the value and wakes their worker (no I2C here).
+        WaveshareOutputs::onLockMqtt(sub, value);
+#endif
 
         if(receiver != nullptr)
         {

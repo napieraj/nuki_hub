@@ -108,6 +108,9 @@ private:
 #ifdef NUKI_HUB_EMBEDDED_LOCK_MQTT
     void buildLockMqttSection(PsychicStreamResponse* response, const ForkSettingsLogic::Settings& s, const ForkSettingsLogic::Settings& stored);
 #endif
+#ifdef NUKI_HUB_WAVESHARE_8DI8RO
+    void buildRelaySection(PsychicStreamResponse* response, const ForkSettingsLogic::Settings& s, const ForkSettingsLogic::Settings& stored);
+#endif
 #endif
 
     NukiWrapper* _nuki = nullptr;
