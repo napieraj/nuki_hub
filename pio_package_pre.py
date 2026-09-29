@@ -14,17 +14,33 @@ os.system("python resources/bin2array/bin2array.py icon/favicon-32x32.png -O src
 os.system("python resources/bin2array/bin2array.py resources/style.css -O src/webServerConstants/style.h -l 16")
 os.system("python resources/bin2array/bin2array.py resources/AsyncWebSerial/frontend/index.html -O src/webServerConstants/webSerial.h -l 16")
 
-regex = r"\#define NUKI_HUB_DATE \"(.*)\""
-content_new = ""
-file_content = ""
+build_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
-with open ('src/Config.h', 'r' ) as readfile:
-    file_content = readfile.read()
-    content_new = re.sub(regex, "#define NUKI_HUB_DATE \"" + datetime.now(timezone.utc).strftime("%Y-%m-%d") + "\"", file_content, flags = re.M)
+if "NUKI_HUB_WAVESHARE_8DI8RO" in str(env.GetProjectOption("build_flags", "")):
+    # Fork build: write the date to a generated, git-ignored header that
+    # Config.h includes, so a build never leaves src/Config.h modified.
+    generated = "src/webServerConstants/buildDate.h"
+    date_content = "#pragma once\n#define NUKI_HUB_DATE \"" + build_date + "\"\n"
+    old_content = ""
+    if os.path.exists(generated):
+        with open(generated, 'r') as readfile:
+            old_content = readfile.read()
+    if old_content != date_content:
+        os.makedirs(os.path.dirname(generated), exist_ok=True)
+        with open(generated, 'w') as writefile:
+            writefile.write(date_content)
+else:
+    regex = r"\#define NUKI_HUB_DATE \"(.*)\""
+    content_new = ""
+    file_content = ""
 
-if content_new != file_content:
-    with open('src/Config.h', 'w') as writefile:
-        writefile.write(content_new)
+    with open ('src/Config.h', 'r' ) as readfile:
+        file_content = readfile.read()
+        content_new = re.sub(regex, "#define NUKI_HUB_DATE \"" + build_date + "\"", file_content, flags = re.M)
+
+    if content_new != file_content:
+        with open('src/Config.h', 'w') as writefile:
+            writefile.write(content_new)
 
 recursive_purge("managed_components", ".component_hash")
 

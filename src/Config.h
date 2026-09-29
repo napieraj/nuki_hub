@@ -5,8 +5,14 @@
 #define NUKI_HUB_VERSION "9.18"
 #define NUKI_HUB_VERSION_INT (uint32_t)918
 #define NUKI_HUB_BUILD "unknownbuildnr"
+#if defined(NUKI_HUB_WAVESHARE_8DI8RO) && __has_include("webServerConstants/buildDate.h")
+// Written by pio_package_pre.py on every fork build (git-ignored), so the
+// build doesn't rewrite this tracked file.
+#include "webServerConstants/buildDate.h"
+#else
 #define NUKI_HUB_DATE "2026-09-17"
 #define NUKI_HUB_DATE "2026-09-17"
+#endif
 
 #define GITHUB_LATEST_RELEASE_URL (char*)"https://github.com/technyon/nuki_hub/releases/latest"
 #define GITHUB_OTA_MANIFEST_URL (char*)"https://raw.githubusercontent.com/technyon/nuki_hub/binary/ota/manifest.json"
