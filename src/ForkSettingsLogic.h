@@ -11,6 +11,7 @@
 #include <cstdio>
 #include <cstring>
 #include <strings.h>
+#include "RelayOutputsLogic.h"
 
 namespace ForkSettingsLogic
 {
@@ -73,6 +74,16 @@ namespace ForkSettingsLogic
         char action[LEN_ACTION + 1];
     };
 
+    // One relay (Waveshare 8DI-8RO). role/invert only count when "stored"
+    // is set; otherwise the relay takes RelayOutputsLogic::DEFAULTS.
+    struct RelaySetting
+    {
+        uint8_t role;     // RelayOutputsLogic::RelayRole (stable numbers)
+        bool invert;
+        bool stored;      // the user chose role/invert (never overwritten by defaults)
+        uint32_t pulseMs; // pulse roles and webhook relayN rules
+    };
+
     struct Settings
     {
         bool enabled;                 // master switch
@@ -82,8 +93,8 @@ namespace ForkSettingsLogic
         uint32_t cooldownMs;
         uint32_t actionDeadlineMs;
         uint32_t bleStallMs;
-        uint32_t relayPulseMs;
-        uint8_t relayCount;           // relayN actions allowed for N <= relayCount
+        uint32_t relayPulseMs;        // before v4: the one pulse for all relays; kept, no longer used
+        uint8_t relayCount;           // relay outputs off: relayN actions allowed for N <= relayCount
 
         // Hardening options (all off by default)
         bool bearerOnly;              // refuse ?k=<secret> in the URL
@@ -103,6 +114,11 @@ namespace ForkSettingsLogic
         bool skipRedundant;                             // skip lock/unlock the lock already is in
         uint32_t lockSilenceMs;                         // skip only if the lock was heard from within this
         uint32_t skipGraceS;                            // never skip within this after a webhook lock action (0 = off)
+
+        // Relay state outputs (v4). Off: every relay is a webhook relay as
+        // before. On: each relay follows its role.
+        bool relayOutputs;
+        RelaySetting relays[MAX_RELAYS];
     };
 
     // What the board offers; validation rejects relayN / DIn beyond it.
@@ -129,6 +145,84 @@ namespace ForkSettingsLogic
         s.skipRedundant = true;
         s.lockSilenceMs = LOCK_SILENCE_MS.def;
         s.skipGraceS = SKIP_GRACE_S.def;
+        for(RelaySetting& r : s.relays)
+        {
+            r.pulseMs = RELAY_PULSE_MS.def;
+        }
+    }
+
+    // --- relay roles ---------------------------------------------------------
+    using RelayOutputsLogic::RelayRole;
+
+    // The role the relay has when relay outputs are on (stored, else default).
+    inline RelayRole configuredRole(const Settings& s, size_t i)
+    {
+        if(i >= MAX_RELAYS)
+        {
+            return RelayRole::Off;
+        }
+        return s.relays[i].stored ? RelayOutputsLogic::roleFromStored(s.relays[i].role) : RelayOutputsLogic::DEFAULTS[i].role;
+    }
+
+    inline bool configuredInvert(const Settings& s, size_t i)
+    {
+        if(i >= MAX_RELAYS)
+        {
+            return false;
+        }
+        return s.relays[i].stored ? s.relays[i].invert : RelayOutputsLogic::DEFAULTS[i].invert;
+    }
+
+    // What the relay does now: with relay outputs off, every relay is a webhook relay.
+    inline RelayRole effectiveRole(const Settings& s, size_t i)
+    {
+        return s.relayOutputs ? configuredRole(s, i) : RelayRole::WebhookPulse;
+    }
+
+    inline bool effectiveInvert(const Settings& s, size_t i)
+    {
+        return s.relayOutputs && configuredInvert(s, i);
+    }
+
+    // May a webhook rule use relayN (1-based)? Outputs off: N <= relay count
+    // (as before). On: only relays whose role is WebhookPulse.
+    inline bool relayAvailableToRules(const Settings& s, int relay, uint8_t boardRelays)
+    {
+        if(relay < 1 || relay > (int)boardRelays || relay > (int)MAX_RELAYS)
+        {
+            return false;
+        }
+        return s.relayOutputs ? configuredRole(s, (size_t)relay - 1) == RelayRole::WebhookPulse
+                              : relay <= (int)s.relayCount;
+    }
+
+    // The page submitted role/invert/pulse for relay i. A relay without a
+    // stored role that is submitted with exactly its default stays unstored,
+    // so a save doesn't freeze today's defaults; anything else is stored.
+    inline void applyRelayForm(Settings& s, size_t i, uint8_t role, bool invert, uint32_t pulseMs)
+    {
+        RelaySetting& r = s.relays[i];
+        r.pulseMs = pulseMs;
+        const RelayOutputsLogic::RelayDefault& d = RelayOutputsLogic::DEFAULTS[i];
+        if(!r.stored && RelayOutputsLogic::roleFromStored(role) == d.role && invert == d.invert)
+        {
+            return;
+        }
+        r.stored = true;
+        r.role = role;
+        r.invert = invert;
+    }
+
+    // "Reset relays to defaults": forget every stored role, default pulses.
+    inline void resetRelaysToDefaults(Settings& s)
+    {
+        for(RelaySetting& r : s.relays)
+        {
+            r.stored = false;
+            r.role = 0;
+            r.invert = false;
+            r.pulseMs = RELAY_PULSE_MS.def;
+        }
     }
 
     // Values left over from ProtectWebhookConfig.h.example ("replace-with-...").
@@ -405,7 +499,14 @@ namespace ForkSettingsLogic
     }
 
     // Validate one enabled rule. i is the 0-based slot (messages say "Rule i+1").
-    inline bool validateRule(const Settings& s, size_t i, char* err, size_t errLen)
+    // "relay1".."relay8" -> 1..8, anything else 0.
+    inline int relayOfAction(const char* action)
+    {
+        const char* c = canonicalAction(action, MAX_RELAYS);
+        return c != nullptr && strncmp(c, "relay", 5) == 0 ? c[5] - '0' : 0;
+    }
+
+    inline bool validateRule(const Settings& s, const Caps& caps, size_t i, char* err, size_t errLen)
     {
         const Rule& r = s.rules[i];
         const int n = (int)i + 1;
@@ -414,9 +515,18 @@ namespace ForkSettingsLogic
             snprintf(err, errLen, "Rule %d: the device must be the fob's MAC (12 hex digits)", n);
             return false;
         }
-        if(canonicalAction(r.action, s.relayCount) == nullptr)
+        const int relay = relayOfAction(r.action);
+        if(relay > 0 && s.relayOutputs && relay <= (int)caps.relays && !relayAvailableToRules(s, relay, caps.relays))
         {
-            snprintf(err, errLen, "Rule %d: unknown action (relay actions: relay1..relay%u)", n, (unsigned)s.relayCount);
+            // Fail closed: a rule must never pulse a state output.
+            snprintf(err, errLen, "Rule %d: relay%d has the role '%s'; rules can only use relays with the role "
+                     "'Webhook pulse'", n, relay, RelayOutputsLogic::roleName(configuredRole(s, (size_t)relay - 1)));
+            return false;
+        }
+        if(relay > 0 ? !relayAvailableToRules(s, relay, caps.relays) : canonicalAction(r.action, 0) == nullptr)
+        {
+            snprintf(err, errLen, "Rule %d: unknown action (relay actions: relay1..relay%u)", n,
+                     (unsigned)(s.relayCount < caps.relays ? s.relayCount : caps.relays));
             return false;
         }
         if(isSet(r.value) && !isSet(r.field))
@@ -521,6 +631,31 @@ namespace ForkSettingsLogic
         return true;
     }
 
+    inline bool validateRelays(const Settings& s, const Caps& caps, char* err, size_t errLen)
+    {
+        if(s.relayOutputs && caps.relays == 0)
+        {
+            snprintf(err, errLen, "This board has no relays for relay state outputs");
+            return false;
+        }
+        for(size_t i = 0; i < caps.relays && i < MAX_RELAYS; i++)
+        {
+            if(!inRange(s.relays[i].pulseMs, RELAY_PULSE_MS))
+            {
+                snprintf(err, errLen, "Relay %u: the pulse must be %u-%u ms", (unsigned)i + 1,
+                         (unsigned)RELAY_PULSE_MS.min, (unsigned)RELAY_PULSE_MS.max);
+                return false;
+            }
+            if(s.relayOutputs && configuredRole(s, i) == RelayRole::WebhookPulse && configuredInvert(s, i))
+            {
+                snprintf(err, errLen, "Relay %u: 'Invert' can't be used with 'Webhook pulse' (the contact would "
+                         "stay closed, e.g. the intercom button held down)", (unsigned)i + 1);
+                return false;
+            }
+        }
+        return true;
+    }
+
     // The same checks as the old build-time checks of ProtectWebhookConfig.h,
     // plus ranges. Disabled rules are drafts and not checked.
     inline bool validate(const Settings& s, const Caps& caps, char* err, size_t errLen)
@@ -544,6 +679,10 @@ namespace ForkSettingsLogic
         if(s.relayCount > caps.relays || (caps.relays > 0 && s.relayCount < 1))
         {
             snprintf(err, errLen, "The relay count must be 1-%u", (unsigned)caps.relays);
+            return false;
+        }
+        if(!validateRelays(s, caps, err, errLen))
+        {
             return false;
         }
         if(s.lockDi > caps.digitalInputs)
@@ -586,7 +725,7 @@ namespace ForkSettingsLogic
         }
         for(size_t i = 0; i < MAX_RULES; i++)
         {
-            if(s.rules[i].enabled && !validateRule(s, i, err, errLen))
+            if(s.rules[i].enabled && !validateRule(s, caps, i, err, errLen))
             {
                 return false;
             }
@@ -617,13 +756,17 @@ namespace ForkSettingsLogic
 
     // Version 2 appends the lock MQTT section; version 1 blobs still load
     // (lock MQTT off, defaults). Version 3 appends the skip grace (u32 s);
-    // version 2 blobs load with the default grace.
-    constexpr uint8_t BLOB_VERSION = 3;
+    // version 2 blobs load with the default grace. Version 4 appends the
+    // relay state outputs (master switch, relay count, then per relay: role,
+    // flags, pulse); version 3 blobs load with relay outputs off, no stored
+    // roles and every relay's pulse = the old global relay pulse.
+    constexpr uint8_t BLOB_VERSION = 4;
 
     constexpr size_t MAX_BLOB_SIZE =
         3 + 1 + (1 + LEN_SECRET) + (1 + LEN_IP) + 5 * 4 + 1 + 1 + 1 + 1 +
         MAX_RULES * (1 + (1 + LEN_NAME) + (1 + LEN_TOKEN) + 5 * (1 + LEN_TEXT) + (1 + LEN_DEVICE) + (1 + LEN_ACTION)) +
-        1 + (1 + LEN_MQTT_USER) + (1 + LEN_MQTT_PASS) + (1 + LEN_MQTT_CLIENT_ID) + 4 + 4;
+        1 + (1 + LEN_MQTT_USER) + (1 + LEN_MQTT_PASS) + (1 + LEN_MQTT_CLIENT_ID) + 4 + 4 +
+        1 + 1 + MAX_RELAYS * (1 + 1 + 4);
 
     class Writer
     {
@@ -740,6 +883,14 @@ namespace ForkSettingsLogic
         w.str(s.lockMqttClientId);
         w.u32(s.lockSilenceMs);
         w.u32(s.skipGraceS);
+        w.u8(s.relayOutputs ? 1 : 0);
+        w.u8(MAX_RELAYS);
+        for(const RelaySetting& r : s.relays)
+        {
+            w.u8(r.role);
+            w.u8((uint8_t)((r.invert ? 1 : 0) | (r.stored ? 2 : 0)));
+            w.u32(r.pulseMs);
+        }
         return w.length();
     }
 
@@ -795,6 +946,33 @@ namespace ForkSettingsLogic
         if(ver >= 3 && !r.u32(s.skipGraceS))
         {
             return false;
+        }
+        if(ver >= 4)
+        {
+            uint8_t count;
+            if(!r.flag(s.relayOutputs) || !r.u8(count) || count > MAX_RELAYS)
+            {
+                return false;
+            }
+            for(size_t i = 0; i < count; i++)
+            {
+                RelaySetting& x = s.relays[i];
+                uint8_t relayFlags;
+                if(!r.u8(x.role) || !r.u8(relayFlags) || relayFlags > 3 || !r.u32(x.pulseMs))
+                {
+                    return false;
+                }
+                x.invert = relayFlags & 1;
+                x.stored = relayFlags & 2;
+            }
+        }
+        else
+        {
+            // Before v4 one pulse served every relayN rule.
+            for(RelaySetting& x : s.relays)
+            {
+                x.pulseMs = s.relayPulseMs;
+            }
         }
         if(!r.atEnd())
         {

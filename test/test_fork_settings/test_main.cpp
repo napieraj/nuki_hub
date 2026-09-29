@@ -13,6 +13,8 @@ namespace
     const Caps WAVESHARE = { 8, 8 };
     const Caps NO_RELAYS = { 0, 0 };
     char err[200];
+    // Bytes version 4 appends: master switch, relay count, 8 x (role, flags, pulse).
+    const size_t V4_TAIL = 1 + 1 + MAX_RELAYS * (1 + 1 + 4);
 
     void fillRule(Rule& r, const char* token, const char* action)
     {
@@ -395,7 +397,7 @@ void test_lock_mqtt_settings()
     TEST_ASSERT_EQUAL_UINT32(0, t.skipGraceS);
 
     // Bad lock flags byte.
-    const size_t flagsAt = n - 4 - 4 - (1 + strlen("Nuki_2BB28570")) - (1 + strlen("s3cret")) - (1 + strlen("nukilock")) - 1;
+    const size_t flagsAt = n - V4_TAIL - 4 - 4 - (1 + strlen("Nuki_2BB28570")) - (1 + strlen("s3cret")) - (1 + strlen("nukilock")) - 1;
     TEST_ASSERT_EQUAL_UINT8(1, buf[flagsAt]);
     buf[flagsAt] = 4;
     TEST_ASSERT_FALSE(deserialize(buf, n, t));
@@ -408,7 +410,7 @@ void test_version1_blob_still_loads()
     static uint8_t buf[MAX_BLOB_SIZE];
     size_t n = serialize(s, buf, sizeof(buf));
     const size_t tail = 1 + 1 + 1 + 1 + 4 + 4; // flags, three empty strings, silence, grace
-    n -= tail;
+    n -= tail + V4_TAIL;
     buf[2] = 1;
     Settings t;
     setDefaults(t);
@@ -441,8 +443,8 @@ void test_version2_blob_still_loads()
     s.skipGraceS = 5; // not in a version 2 blob
     static uint8_t buf[MAX_BLOB_SIZE];
     size_t n = serialize(s, buf, sizeof(buf));
-    TEST_ASSERT_EQUAL_UINT8(3, buf[2]);
-    n -= 4; // drop the grace
+    TEST_ASSERT_EQUAL_UINT8(BLOB_VERSION, buf[2]);
+    n -= 4 + V4_TAIL; // drop the grace and the relay outputs
     buf[2] = 2;
     Settings t;
     setDefaults(t);
@@ -462,6 +464,202 @@ void test_version2_blob_still_loads()
     TEST_ASSERT_FALSE(deserialize(buf, n, t));
     TEST_ASSERT_TRUE(deserialize(buf, n + 4, t));
     TEST_ASSERT_EQUAL_UINT32(5, t.skipGraceS);
+}
+
+void test_version3_blob_still_loads()
+{
+    // What the current v3 firmware stores: no relay outputs section. It must
+    // load with relay outputs off, no stored roles, and every relay pulsing
+    // for the old global relay pulse, so relayN rules behave exactly as before.
+    Settings s = valid(); // rule 2: relay2
+    s.relayPulseMs = 1500;
+    s.relayCount = 2;
+    s.lockMqttEnabled = true;
+    strcpy(s.lockMqttUser, "nukilock");
+    strcpy(s.lockMqttPass, "s3cret");
+    s.skipGraceS = 42;
+    static uint8_t buf[MAX_BLOB_SIZE];
+    size_t n = serialize(s, buf, sizeof(buf));
+    n -= V4_TAIL;
+    buf[2] = 3;
+    Settings t;
+    setDefaults(t);
+    t.relayOutputs = true;        // must be overwritten
+    t.relays[0].stored = true;
+    TEST_ASSERT_TRUE(deserialize(buf, n, t));
+    TEST_ASSERT_FALSE(t.relayOutputs);
+    for(size_t i = 0; i < MAX_RELAYS; i++)
+    {
+        TEST_ASSERT_FALSE(t.relays[i].stored);
+        TEST_ASSERT_EQUAL_UINT32(1500, t.relays[i].pulseMs);
+        TEST_ASSERT_TRUE(effectiveRole(t, i) == RelayRole::WebhookPulse);
+        TEST_ASSERT_FALSE(effectiveInvert(t, i));
+    }
+    TEST_ASSERT_EQUAL_UINT32(42, t.skipGraceS);
+    TEST_ASSERT_EQUAL_STRING("s3cret", t.lockMqttPass);
+    TEST_ASSERT_EQUAL_MEMORY(&s.rules, &t.rules, sizeof(s.rules));
+    TEST_ASSERT_TRUE(ok(t));
+    TEST_ASSERT_TRUE(relayAvailableToRules(t, 2, 8));
+    TEST_ASSERT_FALSE(relayAvailableToRules(t, 3, 8)); // relay count 2, as before
+    // v3 with the v4 tail, and v4 without it, are refused.
+    TEST_ASSERT_FALSE(deserialize(buf, n + V4_TAIL, t));
+    buf[2] = 4;
+    TEST_ASSERT_FALSE(deserialize(buf, n, t));
+    TEST_ASSERT_TRUE(deserialize(buf, n + V4_TAIL, t));
+}
+
+void test_relay_settings_round_trip()
+{
+    Settings s = valid();
+    s.relayOutputs = true;
+    s.relays[1].stored = true;          // relay 2 (rule 2's relay) back to a webhook relay
+    s.relays[1].role = (uint8_t)RelayRole::WebhookPulse;
+    s.relays[1].pulseMs = 800;
+    s.relays[7].stored = true;
+    s.relays[7].role = (uint8_t)RelayRole::NightMode;
+    s.relays[7].invert = true;
+    static uint8_t buf[MAX_BLOB_SIZE];
+    const size_t n = serialize(s, buf, sizeof(buf));
+    TEST_ASSERT_TRUE(n > 0);
+    Settings t;
+    TEST_ASSERT_TRUE(deserialize(buf, n, t));
+    TEST_ASSERT_EQUAL_MEMORY(&s, &t, sizeof(s));
+    TEST_ASSERT_TRUE(t.relayOutputs);
+    TEST_ASSERT_TRUE(configuredRole(t, 7) == RelayRole::NightMode);
+    TEST_ASSERT_TRUE(configuredInvert(t, 7));
+    TEST_ASSERT_TRUE(configuredRole(t, 2) == RelayRole::DoorOpen); // default for relay 3
+    TEST_ASSERT_TRUE(configuredInvert(t, 4));                      // relay 5 LockFault, inverted
+    TEST_ASSERT_TRUE(ok(t));
+
+    // Damaged relay section: flags > 3, too many relays.
+    static uint8_t copy[MAX_BLOB_SIZE];
+    memcpy(copy, buf, n);
+    copy[n - V4_TAIL + 1 + 1 + 1] = 4; // relay 1 flags
+    TEST_ASSERT_FALSE(deserialize(copy, n, t));
+    memcpy(copy, buf, n);
+    copy[n - V4_TAIL + 1] = MAX_RELAYS + 1;
+    TEST_ASSERT_FALSE(deserialize(copy, n, t));
+    memcpy(copy, buf, n);
+    copy[n - V4_TAIL] = 2; // master switch not 0/1
+    TEST_ASSERT_FALSE(deserialize(copy, n, t));
+}
+
+void test_unknown_stored_role_reads_off()
+{
+    Settings s;
+    setDefaults(s);
+    s.relayOutputs = true;
+    s.relays[3].stored = true;
+    s.relays[3].role = 200;
+    TEST_ASSERT_TRUE(configuredRole(s, 3) == RelayRole::Off);
+    TEST_ASSERT_TRUE(RelayOutputsLogic::roleFromStored(RelayOutputsLogic::ROLE_COUNT) == RelayRole::Off);
+    TEST_ASSERT_TRUE(RelayOutputsLogic::roleFromStored(11) == RelayRole::NightMode);
+}
+
+void test_relay_rules_follow_roles()
+{
+    // The user's rule: "Fob - Double Right -> Relay 1".
+    Settings s = valid();
+    strcpy(s.rules[1].action, "relay1");
+    TEST_ASSERT_TRUE(ok(s));
+    s.relayOutputs = true; // relay 1 defaults to WebhookPulse: still fine
+    TEST_ASSERT_TRUE(ok(s));
+    TEST_ASSERT_TRUE(validateForSave(s, WAVESHARE, err, sizeof(err)));
+
+    // A rule on a state relay (relay 2 = Secure by default) fails closed.
+    strcpy(s.rules[1].action, "relay2");
+    TEST_ASSERT_FALSE(ok(s));
+    TEST_ASSERT_NOT_NULL(strstr(err, "relay2 has the role"));
+    // ... also when the rule is fine and the role change would orphan it.
+    strcpy(s.rules[1].action, "relay1");
+    applyRelayForm(s, 0, (uint8_t)RelayRole::Locked, false, 3000);
+    TEST_ASSERT_FALSE(ok(s));
+    TEST_ASSERT_NOT_NULL(strstr(err, "relay1 has the role 'Locked'"));
+    // A disabled (draft) rule doesn't block it.
+    s.rules[1].enabled = false;
+    TEST_ASSERT_TRUE(ok(s));
+
+    // Master on ignores the relay count; master off uses it (as before).
+    s = valid();
+    strcpy(s.rules[1].action, "relay8");
+    applyRelayForm(s, 7, (uint8_t)RelayRole::WebhookPulse, false, 3000);
+    s.relayCount = 1;
+    TEST_ASSERT_FALSE(ok(s));
+    s.relayOutputs = true;
+    TEST_ASSERT_TRUE(ok(s));
+    TEST_ASSERT_FALSE(relayAvailableToRules(s, 9, 8));
+    TEST_ASSERT_FALSE(relayAvailableToRules(s, 0, 8));
+    TEST_ASSERT_EQUAL(8, relayOfAction("Relay8"));
+    TEST_ASSERT_EQUAL(0, relayOfAction("unlock"));
+    TEST_ASSERT_EQUAL(0, relayOfAction("relay9"));
+
+    // No relays on the board: no outputs.
+    s = valid();
+    s.relayCount = 0;
+    s.rules[1].enabled = false;
+    s.relayOutputs = true;
+    TEST_ASSERT_FALSE(ok(s, NO_RELAYS));
+}
+
+void test_relay_validation()
+{
+    Settings s = valid();
+    s.relays[4].pulseMs = 99;
+    TEST_ASSERT_FALSE(ok(s));
+    TEST_ASSERT_NOT_NULL(strstr(err, "Relay 5: the pulse"));
+    s.relays[4].pulseMs = 30001;
+    TEST_ASSERT_FALSE(ok(s));
+    s.relays[4].pulseMs = 30000;
+    TEST_ASSERT_TRUE(ok(s));
+
+    // Invert on a webhook relay would hold the intercom button down.
+    s.relayOutputs = true;
+    strcpy(s.rules[1].action, "relay1");
+    applyRelayForm(s, 0, (uint8_t)RelayRole::WebhookPulse, true, 3000);
+    TEST_ASSERT_FALSE(ok(s));
+    TEST_ASSERT_NOT_NULL(strstr(err, "Invert"));
+    // With relay outputs off every relay is a plain webhook relay: accepted.
+    s.relayOutputs = false;
+    TEST_ASSERT_TRUE(ok(s));
+}
+
+void test_relay_form_keeps_defaults_unstored()
+{
+    Settings s;
+    setDefaults(s);
+    // Submitted exactly as the defaults: nothing stored, only the pulse.
+    for(size_t i = 0; i < MAX_RELAYS; i++)
+    {
+        const auto& d = RelayOutputsLogic::DEFAULTS[i];
+        applyRelayForm(s, i, (uint8_t)d.role, d.invert, 2500);
+        TEST_ASSERT_FALSE(s.relays[i].stored);
+        TEST_ASSERT_EQUAL_UINT32(2500, s.relays[i].pulseMs);
+    }
+    // A change is stored, and stays stored even when set back to the default.
+    applyRelayForm(s, 2, (uint8_t)RelayRole::Off, false, 3000);
+    TEST_ASSERT_TRUE(s.relays[2].stored);
+    TEST_ASSERT_TRUE(configuredRole(s, 2) == RelayRole::Off);
+    applyRelayForm(s, 2, (uint8_t)RelayRole::DoorOpen, false, 3000);
+    TEST_ASSERT_TRUE(s.relays[2].stored);
+    TEST_ASSERT_TRUE(configuredRole(s, 2) == RelayRole::DoorOpen);
+    // Invert alone counts as a choice.
+    applyRelayForm(s, 3, (uint8_t)RelayRole::Locked, true, 3000);
+    TEST_ASSERT_TRUE(s.relays[3].stored);
+    // Reset forgets everything.
+    resetRelaysToDefaults(s);
+    for(size_t i = 0; i < MAX_RELAYS; i++)
+    {
+        TEST_ASSERT_FALSE(s.relays[i].stored);
+        TEST_ASSERT_EQUAL_UINT32(RELAY_PULSE_MS.def, s.relays[i].pulseMs);
+        TEST_ASSERT_TRUE(configuredRole(s, i) == RelayOutputsLogic::DEFAULTS[i].role);
+    }
+    // Master off: every relay is a webhook relay whatever is configured.
+    applyRelayForm(s, 5, (uint8_t)RelayRole::NightMode, true, 3000);
+    TEST_ASSERT_TRUE(effectiveRole(s, 5) == RelayRole::WebhookPulse);
+    TEST_ASSERT_FALSE(effectiveInvert(s, 5));
+    s.relayOutputs = true;
+    TEST_ASSERT_TRUE(effectiveRole(s, 5) == RelayRole::NightMode);
+    TEST_ASSERT_TRUE(effectiveInvert(s, 5));
 }
 
 void test_serialize_worst_case_fits()
@@ -695,6 +893,12 @@ int main()
     RUN_TEST(test_lock_mqtt_settings);
     RUN_TEST(test_version1_blob_still_loads);
     RUN_TEST(test_version2_blob_still_loads);
+    RUN_TEST(test_version3_blob_still_loads);
+    RUN_TEST(test_relay_settings_round_trip);
+    RUN_TEST(test_unknown_stored_role_reads_off);
+    RUN_TEST(test_relay_rules_follow_roles);
+    RUN_TEST(test_relay_validation);
+    RUN_TEST(test_relay_form_keeps_defaults_unstored);
     RUN_TEST(test_deserialize_rejects_damage);
     RUN_TEST(test_write_only_fields);
     RUN_TEST(test_text_and_numbers);
